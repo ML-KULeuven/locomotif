@@ -114,7 +114,7 @@ class MDDTW:
 
             occs = self.induced_segments(s, e, mask)
             for (s_o, e_o) in occs:
-                mask[max(0, s_o - overlap):min(n, e_o + overlap)] = True
+                mask[s_o + overlap:e_o - overlap] = True
 
             motifs.append(((s, e), occs))
 
