@@ -195,11 +195,11 @@ def _induced_paths(s, e, series, paths, mask):
             pi, pj = p.find_row(s), p.find_row(e-1)
             s_i, e_i = p[pi][1], p[pj][1] + 1
             if not np.any(mask[s_i:e_i]):
-                induced_path = np.copy(p.path[pi:pj+1])
-                temp = induced_path[:, 0]
-                induced_path[:, 0] = induced_path[:, 1]
-                induced_path[:, 1] = temp
-                induced_paths.append(induced_path)
+                induced_path = p.path[pi:pj+1]
+                mirrored = np.zeros(induced_path.shape, dtype=np.int32)
+                mirrored[:, 0] = induced_path[:, 1]
+                mirrored[:, 1] = induced_path[:, 0]
+                induced_paths.append(mirrored)
 
     return induced_paths
 
