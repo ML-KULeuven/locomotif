@@ -1,10 +1,12 @@
 import numpy as np
 
 import mddtw
-
+from cycler import cycler
 from numba import njit
 from numba.experimental import jitclass
 from numba.typed import List
+
+from dtaidistance import dtw_visualisation as dtwvis
 
 from numba import int32, float64, bool_
 
@@ -71,53 +73,18 @@ class MDDTW:
         fitnesses = _calculate_fitnesses(self.series, mask=mask, paths=self._paths, l_min=self.l_min, l_max=self.l_max, allowed_overlap=allowed_overlap, pruning=pruning)
         return np.array(fitnesses)
 
+    def induced_paths(self, s, e, mask=None):
+        return _induced_paths(s, e, self.series, self._paths, mask)
+
     def induced_segments(self, s, e, mask=None):
-        if mask is None:
-            mask = np.zeros(len(self.series), dtype=np.bool)
-
-        segments = []
-        for i, p in enumerate(self._paths):
-
-            if p.cs <= s and e <= p.ce:
-                s_i, e_i = p[p.find_col(s)][0], p[p.find_col(e-1)][0] + 1
-                if not np.any(mask[s_i:e_i]):
-                    segments.append((s_i, e_i))
-
-            if i == 0:
-                continue
-
-            if p.rs <= s and e <= p.re:
-                s_i, e_i = p[p.find_row(s)][1], p[p.find_row(e-1)][1] + 1
-                if not np.any(mask[s_i:e_i]):
-                    segments.append((s_i, e_i))
-
-        return segments
+        induced_paths = self.induced_paths(s, e, mask)
+        return row_projections(induced_paths)
 
     # iteratively finds the best motif
     def kbest_motifs(self, k=1, overlap=0, pruning=True):
-        n = len(self.series)
-        mask = np.zeros(n, dtype=np.bool)
-        motifs = []
-        ki = k
-        for k in range(ki):
-            
-            fitnesses = self._calculate_fitnesses(mask=mask, allowed_overlap=overlap, pruning=pruning)
-
-            if len(fitnesses) == 0:
-                return motifs
-
-            if k == 0:
-                self._fitnesses = fitnesses
-            
-            # best motif
-            (s, e, _, _, _) = fitnesses[np.argmax(fitnesses[:, 2])].astype(int)
-
-            occs = self.induced_segments(s, e, mask)
-            for (s_o, e_o) in occs:
-                mask[s_o + overlap:e_o - overlap] = True
-
-            motifs.append(((s, e), occs))
-
+        motifs, self._fitnesses = _kbest_motifs(self.series, self._paths, self.l_min, self.l_max, k=k, overlap=overlap, pruning=pruning)
+        if self._fitnesses is None:
+            self._fitnesses = np.array([])
         return motifs
 
     # subsequences that are farthest away from other subsequences (alternatively: highest distances to closest neighbors) (or just no matches ...)
@@ -125,8 +92,46 @@ class MDDTW:
         discords = _discords(self.series, self._paths, self.l_min, self.l_max)
         return discords
 
+    # requires dtaidistance
+    def plot_lc(self):
+        max_v = np.amax(self.step_sizes[:, 0])
+        max_h = np.amax(self.step_sizes[:, 1])
+        # fig, ax = dtwvis.plot_warpingpaths(self.series, self.series, self._cam[max_h - 1:, max_v - 1:], path=-1)
+        rgb_cycler = cycler(color=[u'#00407a', u'#2ca02c', u'#c00000'])
+        fig, ax = dtwvis.plot_warpingpaths(self.series, self.series, self._cam[max_h - 1:, max_v - 1:], path=-1, cycler=rgb_cycler)
+        for p in self._paths:
+            dtwvis.plot_warpingpaths_addpath(ax, p.path)
+            # dtwvis.plot_warpingpaths_addpath(ax, p.path, style='-')
+        return fig, ax
 
-@njit
+    def plot_lc_full(self):
+        max_v = np.amax(self.step_sizes[:, 0])
+        max_h = np.amax(self.step_sizes[:, 1])
+        cam = self._cam
+        cam = cam + cam.T - np.diag(np.diag(cam))
+        # fig, ax = dtwvis.plot_warpingpaths(self.series, self.series, cam[max_h - 1:, max_v - 1:], path=-1)
+        rgb_cycler = cycler(color=[u'#00407a', u'#2ca02c', u'#c00000'])
+        fig, ax = dtwvis.plot_warpingpaths(self.series, self.series, cam[max_h - 1:, max_v - 1:], path=-1, cycler=rgb_cycler)
+        for i, p in enumerate(self._paths):
+            # dtwvis.plot_warpingpaths_addpath(ax, p.path)
+            dtwvis.plot_warpingpaths_addpath(ax, p.path, style='-')
+            if i == 0:
+                continue
+            mirrored_path = np.copy(p.path)
+            mirrored_path[:, [0, 1]] = mirrored_path[:, [1, 0]]
+            # dtwvis.plot_warpingpaths_addpath(ax, mirrored_path)
+            dtwvis.plot_warpingpaths_addpath(ax, mirrored_path, style='-')
+        return fig, ax
+
+    # requires dtaidistance
+    def plot_lc_add_induced_paths(self, ax, s, e, mask=None):
+        induced_paths = self.induced_paths(s, e, mask)
+        for p in induced_paths:
+            dtwvis.plot_warpingpaths_addpath(ax, p, color='green')
+        return ax
+
+
+@njit(cache=True)
 def _discords(series, paths, l_min, l_max):
     mask = np.zeros(len(series), dtype=np.int32)
     for path in paths[1:]:
@@ -136,9 +141,71 @@ def _discords(series, paths, l_min, l_max):
     segments = [(s, e) for (s, e) in segments if l_min < (e - s) and (e - s) < l_max]
     return segments
         
+@njit(cache=True)
+def _kbest_motifs(series, paths, l_min, l_max, k=1, overlap=0, pruning=True):
+    n = len(series)
+    mask = np.zeros(n, dtype=bool_)
+    motifs = []
+    ki = k
+    fitnesses_return = None
 
-@njit
-def _calculate_fitnesses(series, mask, paths, l_min, l_max, allowed_overlap=0, pruning=True):
+    for k in range(ki):
+        
+        fitnesses = _calculate_fitnesses(series, mask, paths, l_min, l_max, allowed_overlap=overlap, pruning=pruning)
+
+        if len(fitnesses) == 0:
+            return motifs, fitnesses_return
+
+        fitnesses = np.array(fitnesses)
+
+        if k == 0:
+            fitnesses_return = fitnesses
+
+        # best motif
+        best = fitnesses[np.argmax(fitnesses[:, 2])]
+        (s, e) = int(best[0]), int(best[1])
+
+        occs = row_projections(_induced_paths(s, e, series, paths, mask))
+        for (s_o, e_o) in occs:
+            mask[s_o + overlap:e_o - overlap] = True
+
+        motifs.append(((s, e), occs))
+
+    return motifs, fitnesses_return
+
+@njit(cache=True)
+def _induced_paths(s, e, series, paths, mask):
+    if mask is None:
+        mask = np.zeros(len(series), dtype=bool_)
+
+    induced_paths = []
+    for i, p in enumerate(paths):
+
+        if p.cs <= s and e <= p.ce:
+            pi, pj = p.find_col(s), p.find_col(e-1)
+            s_i, e_i = p[pi][0], p[pj][0] + 1
+            if not np.any(mask[s_i:e_i]):
+                induced_path = np.copy(p.path[pi:pj+1])
+                induced_paths.append(induced_path)
+
+        if i == 0:
+            continue
+
+        if p.rs <= s and e <= p.re:
+            pi, pj = p.find_row(s), p.find_row(e-1)
+            s_i, e_i = p[pi][1], p[pj][1] + 1
+            if not np.any(mask[s_i:e_i]):
+                induced_path = np.copy(p.path[pi:pj+1])
+                temp = induced_path[:, 0]
+                induced_path[:, 0] = induced_path[:, 1]
+                induced_path[:, 1] = temp
+                induced_paths.append(induced_path)
+
+    return induced_paths
+
+
+@njit(cache=True)
+def _calculate_fitnesses(series, mask, paths, l_min, l_max, allowed_overlap=0, pruning=True) :
     n = len(series)
 
     # TODO: do not do this everytime
@@ -307,16 +374,16 @@ class Path:
 
 
 # project paths to the first axis
-@njit
+@njit(cache=True)
 def row_projections(paths):
-    return [(p[0][0], p[-1][0]+1) for p in paths]
+    return [(p[0][0], p[len(p)-1][0]+1) for p in paths]
 
 # project paths to the second axis
-@njit
+@njit(cache=True)
 def col_projections(paths):
-    return [(p[0][1], p[-1][1]+1) for p in paths]
+    return [(p[0][1], p[len(p)-1][1]+1) for p in paths]
 
-@njit
+@njit(cache=True)
 def segment_overlaps(segments):
     overlaps = []
     perm = np.argsort(segments[:, 0])
@@ -326,7 +393,7 @@ def segment_overlaps(segments):
             overlaps.append(sorted_segments[i - 1][1] - (sorted_segments[i][0] + 1))
     return np.array(overlaps, dtype=np.int32)
 
-@njit
+@njit(cache=True)
 def cumulative_affinity_matrix(am, tau=0.0,  delta=0.0, delta_factor=1.0, step_sizes=np.array([[1, 1], [1, 0], [0, 1]]), window=None, only_triu=False):
     n, m = am.shape
 
@@ -358,7 +425,7 @@ def cumulative_affinity_matrix(am, tau=0.0,  delta=0.0, delta_factor=1.0, step_s
     return d
 
 
-@njit
+@njit(cache=True)
 def max_warping_path(d, mask, r, c, step_sizes=np.array([[1, 1], [1, 0], [0, 1]])):
     max_v = max(step_sizes[:, 0])
     max_h = max(step_sizes[:, 1])
@@ -383,7 +450,7 @@ def max_warping_path(d, mask, r, c, step_sizes=np.array([[1, 1], [1, 0], [0, 1]]
     path.reverse()
     return np.array(path, dtype=np.int32)
 
-@njit
+@njit(cache=True)
 def kbest_paths(d, k, l_min=2, buffer=0, step_sizes=np.array([[1, 1], [1, 0], [0, 1]])):
     max_v = max(step_sizes[:, 0])
     max_h = max(step_sizes[:, 1])
@@ -442,7 +509,7 @@ def kbest_paths(d, k, l_min=2, buffer=0, step_sizes=np.array([[1, 1], [1, 0], [0
         paths.append(path)
     return paths, d
 
-@njit
+@njit(cache=True)
 def affinity_matrix(series1, series2, gamma=1.0, window=None, only_triu=False):
     n, m = len(series1), len(series2)
 
@@ -463,7 +530,7 @@ def affinity_matrix(series1, series2, gamma=1.0, window=None, only_triu=False):
 
     return am
 
-@njit
+@njit(cache=True)
 def affinity_matrix_ndim(series1, series2, gamma=1.0, window=None, only_triu=False):
     n, m = len(series1), len(series2)
 
@@ -484,7 +551,7 @@ def affinity_matrix_ndim(series1, series2, gamma=1.0, window=None, only_triu=Fal
 
     return am
 
-@njit
+@njit(cache=True)
 def to_segments(bit_array):
     diff = np.diff(bit_array)
     ss = np.flatnonzero(diff ==  1) + 1
