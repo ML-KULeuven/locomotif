@@ -53,25 +53,40 @@ class MDDTW:
             else:
                 self._cam = cumulative_affinity_matrix(self._am, tau=self.tau, delta=self.delta, delta_factor=self.delta_factor, step_sizes=self.step_sizes, only_triu=True)
 
-    def kbest_paths(self, buffer, k=None):
+    # force diagonal here and mirror
+    def kbest_paths(self, buffer, k=None, ignored_segments=[]):
         if buffer is None:
             buffer = self.l_min // 2
 
         if self._cam is None:
             self.align()
-        paths, _ = kbest_paths(self._cam, k, l_min=self.l_min, buffer=buffer, step_sizes=self.step_sizes)
+
+        # mask region as if diagonal calculated
+        mask = np.ones(self._cam.shape, dtype=np.bool_)
+        mask[np.triu_indices(len(mask), k=buffer)] = False
+
+        for (s, e) in ignored_segments:
+            mask[s:e, :] = True
+            mask[:, s:e] = True
+
+        # hardcode diagonal
+        paths, _ = kbest_paths(self._cam, k, mask, l_min=self.l_min, buffer=buffer, step_sizes=self.step_sizes)
+        diagonal = np.repeat([np.arange(len(self.series))], 2, axis=0).T
 
         self._paths = List()
+        self._paths.append(Path(diagonal, np.ones(len(diagonal))))
+        
         for path in paths:
             r, c = path[:, 0], path[:, 1]
-            self._paths.append(Path(path, self._am[r, c]))
-        return self._paths
+            affs = self._am[r, c]
+            self._paths.append(Path(path, affs))
+            # also add mirrored path here
+            path_mirrored = np.zeros(path.shape, dtype=np.int32)
+            path_mirrored[:, 0] = np.copy(path[:, 1])
+            path_mirrored[:, 1] = np.copy(path[:, 0])
+            self._paths.append(Path(path_mirrored, affs))
 
-    def _calculate_fitnesses(self, allowed_overlap=0, pruning=True, mask=None):
-        if mask is None:
-            mask = np.zeros(len(self.series), dtype=np.bool)
-        fitnesses = _calculate_fitnesses(self.series, mask=mask, paths=self._paths, l_min=self.l_min, l_max=self.l_max, allowed_overlap=allowed_overlap, pruning=pruning)
-        return np.array(fitnesses)
+        return self._paths
 
     def induced_paths(self, s, e, mask=None):
         return _induced_paths(s, e, self.series, self._paths, mask)
@@ -82,15 +97,20 @@ class MDDTW:
 
     # iteratively finds the best motif
     def kbest_motifs(self, k=1, overlap=0, pruning=True):
-        motifs, self._fitnesses = _kbest_motifs(self.series, self._paths, self.l_min, self.l_max, k=k, overlap=overlap, pruning=pruning)
+        mask = np.ones(len(self.series), dtype=np.bool)
+        for path in self._paths[1:]:
+            mask[path[0][1]:path[-1][1]+1] = 0
+
+        motifs, self._fitnesses = _kbest_motifs(self.series, mask, self._paths, self.l_min, self.l_max, k=k, overlap=overlap, pruning=pruning)
         if self._fitnesses is None:
+            print("No motif sets found")
             self._fitnesses = np.array([])
         return motifs
 
-    # subsequences that are farthest away from other subsequences (alternatively: highest distances to closest neighbors) (or just no matches ...)
-    def discords(self):
-        discords = _discords(self.series, self._paths, self.l_min, self.l_max)
-        return discords
+    # subsequences that are furthest away from other subsequences (alternatively: highest distances to closest neighbors) (or just no matches ...)
+    # def discords(self):
+    #     discords = _discords(self.series, self._paths, self.l_min, self.l_max)
+    #     return discords
 
     # requires dtaidistance
     def plot_lc(self):
@@ -115,12 +135,6 @@ class MDDTW:
         for i, p in enumerate(self._paths):
             # dtwvis.plot_warpingpaths_addpath(ax, p.path)
             dtwvis.plot_warpingpaths_addpath(ax, p.path, style='-')
-            if i == 0:
-                continue
-            mirrored_path = np.copy(p.path)
-            mirrored_path[:, [0, 1]] = mirrored_path[:, [1, 0]]
-            # dtwvis.plot_warpingpaths_addpath(ax, mirrored_path)
-            dtwvis.plot_warpingpaths_addpath(ax, mirrored_path, style='-')
         return fig, ax
 
     # requires dtaidistance
@@ -131,24 +145,21 @@ class MDDTW:
         return ax
 
 
-@njit(cache=True)
-def _discords(series, paths, l_min, l_max):
-    mask = np.zeros(len(series), dtype=np.int32)
-    for path in paths[1:]:
-        mask[path[0][1]:path[-1][1]+1] = 1
-        mask[path[0][0]:path[-1][0]+1] = 1
-    segments = to_segments(1 - mask)
-    segments = [(s, e) for (s, e) in segments if l_min < (e - s) and (e - s) < l_max]
-    return segments
+# @njit(cache=True)
+# def _discords(series, paths, l_min, l_max):
+#     mask = np.zeros(len(series), dtype=np.int32)
+#     for path in paths[1:]:
+#         mask[path[0][1]:path[-1][1]+1] = 1
+#     segments = to_segments(1 - mask)
+#     segments = [(s, e) for (s, e) in segments if l_min < (e - s) and (e - s) < l_max]
+#     return segments
         
 @njit(cache=True)
-def _kbest_motifs(series, paths, l_min, l_max, k=1, overlap=0, pruning=True):
-    n = len(series)
-    mask = np.zeros(n, dtype=bool_)
+def _kbest_motifs(series, mask, paths, l_min, l_max, k=1, overlap=0, pruning=True):
     motifs = []
     ki = k
-    fitnesses_return = None
 
+    fitnesses_return = None
     for k in range(ki):
         
         fitnesses = _calculate_fitnesses(series, mask, paths, l_min, l_max, allowed_overlap=overlap, pruning=pruning)
@@ -162,14 +173,19 @@ def _kbest_motifs(series, paths, l_min, l_max, k=1, overlap=0, pruning=True):
             fitnesses_return = fitnesses
 
         # best motif
-        best = fitnesses[np.argmax(fitnesses[:, 2])]
+        i_best = np.argmax(fitnesses[:, 2])
+        best = fitnesses[i_best]
         (s, e) = int(best[0]), int(best[1])
 
         occs = row_projections(_induced_paths(s, e, series, paths, mask))
         for (s_o, e_o) in occs:
             mask[s_o + overlap:e_o - overlap] = True
 
-        motifs.append(((s, e), occs))
+        # updated
+        fit = best[3]
+        # original
+        # fit = fitnesses_return[i_best][2]
+        motifs.append(((s, e), fit, occs))
 
     return motifs, fitnesses_return
 
@@ -179,8 +195,7 @@ def _induced_paths(s, e, series, paths, mask):
         mask = np.zeros(len(series), dtype=bool_)
 
     induced_paths = []
-    for i, p in enumerate(paths):
-
+    for p in paths:
         if p.cs <= s and e <= p.ce:
             pi, pj = p.find_col(s), p.find_col(e-1)
             s_i, e_i = p[pi][0], p[pj][0] + 1
@@ -188,51 +203,26 @@ def _induced_paths(s, e, series, paths, mask):
                 induced_path = np.copy(p.path[pi:pj+1])
                 induced_paths.append(induced_path)
 
-        if i == 0:
-            continue
-
-        if p.rs <= s and e <= p.re:
-            pi, pj = p.find_row(s), p.find_row(e-1)
-            s_i, e_i = p[pi][1], p[pj][1] + 1
-            if not np.any(mask[s_i:e_i]):
-                induced_path = p.path[pi:pj+1]
-                mirrored = np.zeros(induced_path.shape, dtype=np.int32)
-                mirrored[:, 0] = induced_path[:, 1]
-                mirrored[:, 1] = induced_path[:, 0]
-                induced_paths.append(mirrored)
-
     return induced_paths
 
 
 @njit(cache=True)
 def _calculate_fitnesses(series, mask, paths, l_min, l_max, allowed_overlap=0, pruning=True) :
     n = len(series)
-
-    # TODO: do not do this everytime
-    discords = _discords(series, paths, l_min, l_max)
+    
     # bitarray containing where a motif can start
     ss = np.ones(n, dtype=np.int32)
+
     ss[-l_min+1:] = 0
-    for (s_d, e_d) in discords:
-        ss[s_d:e_d] = 0
     ss[mask] = 0
     ss = np.flatnonzero(ss)
-
-    # mirror the paths: 
-    all_paths = [paths[0]]
-    for path in paths[1:]:
-        path_mirrored = np.zeros(path.path.shape, dtype=np.int32)
-        path_mirrored[:, 0] = np.copy(path.path[:, 1])
-        path_mirrored[:, 1] = np.copy(path.path[:, 0])
-        all_paths.append(path)
-        all_paths.append(Path(path_mirrored, path.sims))
         
     fitnesses = []
 
-    css = np.array([path.cs for path in all_paths])
-    ces = np.array([path.ce for path in all_paths])
+    css = np.array([path.cs for path in paths])
+    ces = np.array([path.ce for path in paths])
 
-    nbp = len(all_paths)
+    nbp = len(paths)
 
     pis = np.zeros(nbp, dtype=np.int32)
     pjs = np.zeros(nbp, dtype=np.int32)
@@ -260,7 +250,7 @@ def _calculate_fitnesses(series, mask, paths, l_min, l_max, allowed_overlap=0, p
             ps  = np.flatnonzero(pmask)
             # from here on only consider unmasked
             for p in ps:
-                path = all_paths[p]
+                path = paths[p]
                 pis[p] = pi = path.find_col(s)
                 pjs[p] = pj = path.find_col(e-1)
                 iss[p] = path[pi][0]
@@ -304,9 +294,8 @@ def _calculate_fitnesses(series, mask, paths, l_min, l_max, allowed_overlap=0, p
             score = 0
             total_length = 0
             for p in ps:
-                score += np.sum(all_paths[p].sims[pis[p]:pjs[p]+1])
+                score += np.sum(paths[p].sims[pis[p]:pjs[p]+1])
                 total_length += (pjs[p] - pis[p] + 1)
-
 
             n_score = (score - (e - s)) / float(total_length)
 
@@ -451,11 +440,9 @@ def max_warping_path(d, mask, r, c, step_sizes=np.array([[1, 1], [1, 0], [0, 1]]
     return np.array(path, dtype=np.int32)
 
 @njit(cache=True)
-def kbest_paths(d, k, l_min=2, buffer=0, step_sizes=np.array([[1, 1], [1, 0], [0, 1]])):
+def kbest_paths(d, k, mask, l_min=2, buffer=0, step_sizes=np.array([[1, 1], [1, 0], [0, 1]])):
     max_v = max(step_sizes[:, 0])
     max_h = max(step_sizes[:, 1])
-
-    mask = np.zeros(d.shape, dtype=np.bool_)
 
     rs, cs = np.nonzero(d == 0)
     for i in range(len(rs)):

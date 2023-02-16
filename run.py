@@ -49,7 +49,7 @@ def main():
     delta_factor = 0.5
 
     motifs, _, _ = run_and_time(series, nb_motifs, tau=tau, delta=delta, delta_factor=delta_factor, l_min=l_min, l_max=l_max, buffer=buffer, overlap=overlap, step_sizes=step_sizes)
-    visualize.plot_motif_sets(series, motifs)
+    visualize.plot_motif_sets(series, [occs for (_, occs) in motifs])
     plt.show()
 
 
