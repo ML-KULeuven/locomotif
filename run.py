@@ -70,7 +70,7 @@ def run_and_time(series, nb_motifs, tau, delta, delta_factor=0.5, l_min=4, l_max
     times[1] = end_time - start_time
 
     start_time = time.time()
-    motifs = md.kbest_motifs(k=nb_motifs, overlap=overlap)
+    motifs = md.kbest_motif_sets(k=nb_motifs, overlap=overlap)
     end_time = time.time()
     print(f"Best Motifs took: {end_time - start_time} seconds")
 
@@ -82,6 +82,26 @@ def run(series, nb_motifs, tau, delta, delta_factor=0.5, l_min=4, l_max=None, bu
     md.kbest_paths(buffer=buffer)
     motifs = md.kbest_motifs(k=nb_motifs, overlap=overlap)
     return motifs, md
+
+def run_default(series, rho, l_min, l_max, nb_motifs):
+    gamma = 1
+    
+    am  = mddtw.affinity_matrix_ndim(series, series, gamma, only_triu=True)
+    tau = mddtw.estimate_tau_from_am(am, rho)
+
+    delta = -2*tau
+    delta_factor = 0.5
+
+    step_sizes = np.array([(1, 1), (2, 1), (1, 2)])
+
+    mdi= mddtw.MDDTW(series, tau=tau, delta=delta, delta_factor=delta_factor, l_min=l_min, l_max=l_max, step_sizes=step_sizes, use_c=False)
+    mdi._am = am
+    mdi.align()
+    mdi.kbest_paths(buffer=l_min // 2)
+    motif_sets = mdi.kbest_motif_sets(k=nb_motifs, allowed_overlap=0.5)
+    motif_sets = [occs for (_, occs) in motif_sets]
+    return motif_sets
+
 
 if __name__ == "__main__":
    main()

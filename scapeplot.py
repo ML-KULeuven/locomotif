@@ -45,10 +45,10 @@ def scape_plot(n, values, filename=None, figure=None):
         fig, ax = None, None
     return fig, ax
 
-def plot_segment(ax, s, e):
+def plot_segment(ax, s, e, color='black'):
     length = e - s
     center = s + length // 2
-    ax.scatter(center + 0.5, length + 0.5, s=20, c='black')
+    ax.scatter(center + 0.5, length + 0.5, s=20, c=color)
     return ax
 
 def plot_segments(ax, segments):

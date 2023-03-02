@@ -6,12 +6,12 @@ SMALL_SIZE = 8
 MEDIUM_SIZE = 10
 BIGGER_SIZE = 12
 
-plt.rc('font', size=SMALL_SIZE)          
-plt.rc('axes', titlesize=SMALL_SIZE)
-plt.rc('axes', labelsize=MEDIUM_SIZE)
-plt.rc('xtick', labelsize=SMALL_SIZE)
-plt.rc('ytick', labelsize=SMALL_SIZE)
-plt.rc('legend', fontsize=SMALL_SIZE)
+plt.rc('font',        size=SMALL_SIZE)          
+plt.rc('axes',   titlesize=SMALL_SIZE)
+plt.rc('axes',   labelsize=MEDIUM_SIZE)
+plt.rc('xtick',  labelsize=SMALL_SIZE)
+plt.rc('ytick',  labelsize=SMALL_SIZE)
+plt.rc('legend',  fontsize=SMALL_SIZE)
 plt.rc('figure', titlesize=BIGGER_SIZE)
 
 
@@ -64,3 +64,4 @@ def plot_ground_truth_ax(ax, gt, n):
             ax.text(text_x, text_y, str(key), horizontalalignment='center', verticalalignment='center', transform=ax.transAxes)
     plt.tight_layout()
     return ax
+
