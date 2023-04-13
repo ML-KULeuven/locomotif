@@ -1,0 +1,23 @@
+# pyproject.toml
+
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages    = ['twmd']
+
+[project]
+name = "twmd"
+version = "0.0.0"
+description = "Time Warping Motif Discovery"
+readme = "README.md"
+authors = [{ name = "Daan Van Wesenbeeck" }]
+license = { file = "LICENSE" }
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+]
+keywords = ["time series", "motif sets", "variable-length", "time warping"]
+requires-python = ">=3.9"
