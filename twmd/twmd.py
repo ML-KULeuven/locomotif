@@ -58,9 +58,6 @@ class TWMD:
         self._am = None
         # LC Paths
         self._paths = None
-        # List containing fitness values
-        self._fitnesses = None
-        
         self.use_c = use_c
 
     def align(self):
@@ -155,9 +152,8 @@ class TWMD:
         end_mask[:self.l_min]      = True
 
         # iteratively find best motif sets
-        motif_sets = []
-
-        while (k is None or len(motif_sets) < k):
+        kc = 0
+        while (k is None or kc < k):
 
             if np.all(mask) or np.all(start_mask) or np.all(end_mask):
                 break
@@ -165,28 +161,25 @@ class TWMD:
             start_mask[mask] = True
             end_mask[mask]   = True
         
-            # fitnesses = self.calculate_fitnesses(start_mask, end_mask, mask, allowed_overlap=allowed_overlap, pruning=pruning)
-            fitnesses = self.calculate_fitnesses_parallel(start_mask, end_mask, mask, allowed_overlap=allowed_overlap, pruning=pruning)
+            fitnesses = self.calculate_fitnesses(start_mask, end_mask, mask, allowed_overlap=allowed_overlap, pruning=pruning)
+            # fitnesses = self.calculate_fitnesses_parallel(start_mask, end_mask, mask, allowed_overlap=allowed_overlap, pruning=pruning)
 
             if len(fitnesses) == 0:
                 break
-
-            if len(motif_sets) == 0:
-                self._fitnesses = fitnesses
 
             # best motif
             i_best = np.argmax(fitnesses[:, 2])
             best = fitnesses[i_best]
 
             (s, e) = int(best[0]), int(best[1])
-            occs = row_projections(_induced_paths(s, e, self.series, self._paths, mask, self.l_min, self.l_max))
-            for (s_o, e_o) in occs:
-                l_occ = e_o - s_o
+            segs = row_projections(_induced_paths(s, e, self.series, self._paths, mask, self.l_min, self.l_max))
+            for (s_seg, e_seg) in segs:
+                l_occ = e_seg - s_seg
                 # if overlap = 0.5, ensure one single t to be masked
-                mask[s_o + int(allowed_overlap * l_occ) - 1 : e_o - int(allowed_overlap * l_occ)] = True
-            motif_sets.append((best, occs))
+                mask[s_seg + int(allowed_overlap * l_occ) - 1 : e_seg - int(allowed_overlap * l_occ)] = True
+            kc += 1
+            yield (best, segs), fitnesses
             
-        return motif_sets
 
     # requires dtaidistance
     def plot_lc(self):
@@ -235,7 +228,7 @@ class Path:
         self.rs = path[0][0]
         self.re = path[len(path) - 1][0] + 1
         self.cs = path[0][1]
-        self.ce = path[len(path) - 1][1]  + 1
+        self.ce = path[len(path) - 1][1] + 1
         self._construct_index(path)
 
     def __getitem__(self, i):
@@ -556,7 +549,7 @@ def affinity_matrix_ndim(series1, series2, gamma=1.0, window=None, only_triu=Fal
         if only_triu:
             j_start = max(i, j_start)
 
-        j_end   = min(n, i + max(0, m - n) + window)
+        j_end   = min(m, i + max(0, m - n) + window)
 
         affinities = np.exp(-gamma * np.sum(np.power(series1[i, :] - series2[j_start:j_end, :], 2), axis=1))
         am[i, j_start:j_end] = affinities
