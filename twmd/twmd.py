@@ -177,6 +177,7 @@ class TWMD:
                 l_occ = e_seg - s_seg
                 # if overlap = 0.5, ensure one single t to be masked
                 mask[s_seg + int(allowed_overlap * l_occ) - 1 : e_seg - int(allowed_overlap * l_occ)] = True
+
             kc += 1
             yield (best, segs), fitnesses
             
@@ -340,8 +341,6 @@ def _calculate_fitnesses(start_mask, end_mask, mask, n, paths, l_min, l_max, all
             if not np.any(pmask[1:]):
                 break
 
-            # from here on only consider unmasked
-            ps = np.flatnonzero(pmask)
             # sort iss and ies
             iss_ = iss[pmask]
             ies_ = ies[pmask]
@@ -350,34 +349,25 @@ def _calculate_fitnesses(start_mask, end_mask, mask, n, paths, l_min, l_max, all
             iss_ = iss_[perm]
             ies_ = ies_[perm]
 
-            skip = False
-            overlaps = []
-            # check overlap
-            for i in range(1, len(iss_)):
-                if ies_[i - 1] > iss_[i] + 1:
-                    overlap = ies_[i - 1] - (iss_[i] + 1)
-                    # if overlap > allowed_overlap:
-                    if overlap > allowed_overlap * (ies_[i - 1] - iss_[i - 1]) // 2 or overlap > allowed_overlap * (ies_[i] - iss_[i]) // 2:
-                        skip = True
-                        break
-                    overlaps.append(overlap)
-
-            if skip:
+            # overlaps   
+            len_     = ies_ - iss_
+            len_[:-1] = np.minimum(len_[:-1], len_[1:])
+            overlaps  = np.maximum(ies_[:-1] - iss_[1:] - 1, 0)
+            
+            if np.any(overlaps > allowed_overlap * len_[:-1]): 
                 if pruning:
                     break
                 else:
                     continue
 
-            coverage = np.sum(ies_ - iss_) - np.sum(np.array(overlaps))
+            coverage = np.sum(ies_ - iss_) - np.sum(overlaps)
             n_coverage = (coverage - (e - s)) / float(n)
 
             score = 0
-            total_length = 0
-            for p in ps:
+            for p in np.flatnonzero(pmask):
                 score += np.sum(paths[p].sims[pis[p]:pjs[p]+1])
-                total_length += (pjs[p] - pis[p] + 1)
 
-            n_score = (score - (e - s)) / float(total_length)
+            n_score = (score - (e - s)) / float(np.sum(pjs[pmask] - pis[pmask] + 1))
 
             fit = 0
             if n_coverage != 0 or n_score != 0:
