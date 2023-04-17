@@ -23,7 +23,7 @@ def twmd(series, rho, l_min, l_max, nb_motifs, overlap=0.5):
 
     step_sizes = np.array([(1, 1), (2, 1), (1, 2)])
 
-    mdi = TWMD(series=series, gamma=gamma, tau=tau, delta=delta, delta_factor=delta_factor, l_min=l_min, l_max=l_max, step_sizes=step_sizes, use_c=False)
+    mdi = TWMD(series=series, gamma=gamma, tau=tau, delta=delta, delta_factor=delta_factor, l_min=l_min, l_max=l_max, step_sizes=step_sizes)
     mdi._am = am
     mdi.align()
     mdi.kbest_paths(buffer=max(10, l_min // 2))
