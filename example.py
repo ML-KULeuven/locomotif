@@ -16,8 +16,8 @@ def main():
     series = (series - np.mean(series, axis=0)) / np.std(series, axis=0)
 
     # Parameter rho determines the 'strictness' of the algorithm  
-    #   - higher -> less strict (time series subsequences match more easily)
-    #   - lower  -> more strict (time series subsequences match less easily) 
+    #   - higher -> more strict (time series subsequences match less easily)
+    #   - lower  -> less strict (time series subsequences match more easily) 
     rho = 0.55
 
     # Number of motifs to be found
