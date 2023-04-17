@@ -313,8 +313,7 @@ def _kbest_paths(d, k, mask, l_min=2, buffer=0, step_sizes=np.array([[1, 1], [1,
             for (x, y) in path:
                 mask[x + max_h, y + max_v] = True
 
-            if (path[-1][0] - path[0][0] + 1) < l_min // 2 or (path[-1][1] - path[0][1] + 1) < l_min // 2:
-            # if (path[-1][0] - path[0][0] + 1) < l_min or (path[-1][1] - path[0][1] + 1) < l_min:
+            if (path[-1][0] - path[0][0] + 1) < l_min and (path[-1][1] - path[0][1] + 1) < l_min:
                 path = None
 
         # Buffer: Bresenham's algorithm
@@ -481,7 +480,7 @@ def affinity_matrix_ndim(series1, series2, gamma=1.0, window=None, only_triu=Fal
     return am
 
 @njit(cache=True)
-def cumulative_affinity_matrix(am, tau=0.0,  delta=0.0, delta_factor=1.0, step_sizes=np.array([[1, 1], [1, 0], [0, 1]]), window=None, only_triu=False):
+def cumulative_affinity_matrix(am, tau=0.0, delta=0.0, delta_factor=1.0, step_sizes=np.array([[1, 1], [1, 0], [0, 1]]), window=None, only_triu=False):
     n, m = am.shape
 
     if window is None:
