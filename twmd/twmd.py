@@ -31,9 +31,14 @@ def twmd(series, rho, l_min, l_max, nb_motifs, overlap=0.5):
     motif_sets = [subsqs for (_, subsqs) in motif_sets]
     return motif_sets
 
+
+
+
+
+
 class TWMD:
 
-    def __init__(self, series, gamma=1.0, tau=0.0, delta=0.0, delta_factor=0.5, l_min=4, l_max=None, step_sizes=None, use_c=False):
+    def __init__(self, series, gamma=1.0, tau=0.0, delta=0.0, delta_factor=0.5, l_min=4, l_max=None, step_sizes=None):
         if step_sizes is None:
             step_sizes = [(1, 1), (1, 0), (0, 1)]
         if l_max is None:
@@ -58,17 +63,12 @@ class TWMD:
         self._am = None
         # LC Paths
         self._paths = None
-        self.use_c = use_c
 
     def align(self):
         if self._am is None:
             self._am  = affinity_matrix_ndim(self.series, self.series, gamma=self.gamma, only_triu=True)
         if self._cam is None:
-            # this is not supported here
-            if self.use_c:
-                self._cam = mddtw.cumulative_affinity_matrix_multidim(self.series, gamma=self.gamma, tau=self.tau, delta=self.delta, delta_factor=self.delta_factor, steps=self.step_sizes)
-            else:
-                self._cam = cumulative_affinity_matrix(self._am, tau=self.tau, delta=self.delta, delta_factor=self.delta_factor, step_sizes=self.step_sizes, only_triu=True)
+            self._cam = cumulative_affinity_matrix(self._am, tau=self.tau, delta=self.delta, delta_factor=self.delta_factor, step_sizes=self.step_sizes, only_triu=True)
 
     def kbest_paths(self, buffer, k=None):
         if buffer is None:
@@ -82,7 +82,7 @@ class TWMD:
         mask[np.triu_indices(len(mask), k=buffer)] = False
 
         # hardcode diagonal
-        paths, _ = kbest_paths(self._cam, k, mask, l_min=self.l_min, buffer=buffer, step_sizes=self.step_sizes)
+        paths, _ = _kbest_paths(self._cam, k, mask, l_min=self.l_min, buffer=buffer, step_sizes=self.step_sizes)
         diagonal = np.vstack(np.diag_indices(len(self.series))).T
 
         # self._paths = List()
@@ -204,6 +204,7 @@ class TWMD:
             dtwvis.plot_warpingpaths_addpath(ax, p, color=color)
         return ax
 
+# class ApproximateTWMD:
 def estimate_tau_from_std(series, f, gamma=None):
     diffm = np.std(series, axis=0)
     diffp = f * diffm
@@ -270,6 +271,75 @@ class Path:
         assert col - self.cs >= 0 and col - self.cs < len(self.col_index)
         return self.col_index[col - self.cs]
 
+
+@njit(cache=True)
+def _kbest_paths(d, k, mask, l_min=2, buffer=0, step_sizes=np.array([[1, 1], [1, 0], [0, 1]])):
+    max_v = max(step_sizes[:, 0])
+    max_h = max(step_sizes[:, 1])
+
+    rs, cs = np.nonzero(d == 0)
+    for i in range(len(rs)):
+        mask[rs[i], cs[i]] = True
+
+    rs, cs = np.nonzero(d)
+    values = np.array([d[rs[i], cs[i]] for i in range(len(rs))])
+    
+    perm = np.argsort(values)
+    rs = rs[perm]
+    cs = cs[perm]
+
+    i = len(rs) - 1
+
+    ki = 0
+    paths = []
+
+    while (k is None or ki < k) and i >= 0:
+        path = None
+
+        while path is None:
+
+            # Find the best unmasked
+            while (mask[rs[i], cs[i]]):
+                i -= 1
+                if i < 0:
+                    return paths, d
+
+            r, c = rs[i], cs[i]
+
+            if r < max_v or c < max_h:
+                return paths, d
+            
+            path = max_warping_path(d, mask, r, c, step_sizes=step_sizes)
+            for (x, y) in path:
+                mask[x + max_h, y + max_v] = True
+
+            if (path[-1][0] - path[0][0] + 1) < l_min // 2 or (path[-1][1] - path[0][1] + 1) < l_min // 2:
+            # if (path[-1][0] - path[0][0] + 1) < l_min or (path[-1][1] - path[0][1] + 1) < l_min:
+                path = None
+
+        # Buffer: Bresenham's algorithm
+        (xc, yc) = path[0] + np.array((max_v, max_h))
+        for (xt, yt) in path[1:] + np.array((max_v, max_h)):
+            dx  =  xt - xc
+            dy  =  yc - yt
+            err = dx + dy
+            while xc != xt or yc != yt:
+                mask[xc-buffer:xc+buffer+1, yc] = True
+                mask[xc, yc-buffer:yc+buffer+1] = True
+                e = 2 * err
+                if e > dy:
+                    err += dy
+                    xc  += 1
+                if e < dx:
+                    err += dx
+                    yc  += 1
+        mask[xt-buffer:xt+buffer+1, yt] = True
+        mask[xt, yt-buffer:yt+buffer+1] = True
+        
+        # Add path
+        ki += 1
+        paths.append(path)
+    return paths, d
 
 # @njit(cache=True)
 def _induced_paths(s, e, series, paths, mask, l_min, l_max):
@@ -390,14 +460,25 @@ def col_projections(paths):
     return [(p[0][1], p[len(p)-1][1]+1) for p in paths]
 
 @njit(cache=True)
-def segment_overlaps(segments):
-    overlaps = []
-    perm = np.argsort(segments[:, 0])
-    sorted_segments = segments[perm, :]
-    for i in range(1, len(sorted_segments)):
-        if sorted_segments[i - 1][1] > sorted_segments[i][0] + 1:
-            overlaps.append(sorted_segments[i - 1][1] - (sorted_segments[i][0] + 1))
-    return np.array(overlaps, dtype=np.int32)
+def affinity_matrix_ndim(series1, series2, gamma=1.0, window=None, only_triu=False):
+    n, m = len(series1), len(series2)
+
+    if window is None:
+        window = max(n, m)
+
+    am = np.zeros((n, m))
+    for i in range(n):
+
+        j_start = max(0, i - max(0, n - m) - window + 1)
+        if only_triu:
+            j_start = max(i, j_start)
+
+        j_end   = min(m, i + max(0, m - n) + window)
+
+        affinities = np.exp(-gamma * np.sum(np.power(series1[i, :] - series2[j_start:j_end, :], 2), axis=1))
+        am[i, j_start:j_end] = affinities
+
+    return am
 
 @njit(cache=True)
 def cumulative_affinity_matrix(am, tau=0.0,  delta=0.0, delta_factor=1.0, step_sizes=np.array([[1, 1], [1, 0], [0, 1]]), window=None, only_triu=False):
@@ -455,108 +536,6 @@ def max_warping_path(d, mask, r, c, step_sizes=np.array([[1, 1], [1, 0], [0, 1]]
 
     path.reverse()
     return np.array(path, dtype=np.int32)
-
-@njit(cache=True)
-def kbest_paths(d, k, mask, l_min=2, buffer=0, step_sizes=np.array([[1, 1], [1, 0], [0, 1]])):
-    max_v = max(step_sizes[:, 0])
-    max_h = max(step_sizes[:, 1])
-
-    rs, cs = np.nonzero(d == 0)
-    for i in range(len(rs)):
-        mask[rs[i], cs[i]] = True
-
-    rs, cs = np.nonzero(d)
-    values = np.array([d[rs[i], cs[i]] for i in range(len(rs))])
-    
-    perm = np.argsort(values)
-    rs = rs[perm]
-    cs = cs[perm]
-
-    i = len(rs) - 1
-
-    ki = 0
-    paths = []
-
-    while (k is None or ki < k) and i >= 0:
-        path = None
-
-        while path is None:
-
-            # Find the best unmasked
-            while (mask[rs[i], cs[i]]):
-                i -= 1
-                if i < 0:
-                    return paths, d
-
-            r, c = rs[i], cs[i]
-
-            if r < max_v or c < max_h:
-                return paths, d
-            
-            path = max_warping_path(d, mask, r, c, step_sizes=step_sizes)
-            for (x, y) in path:
-                mask[x + max_h, y + max_v] = True
-
-            if (path[-1][0] - path[0][0] + 1) < l_min // 2 or (path[-1][1] - path[0][1] + 1) < l_min // 2:
-            # if (path[-1][0] - path[0][0] + 1) < l_min or (path[-1][1] - path[0][1] + 1) < l_min:
-                path = None
-
-        # Buffer: Bresenham's algorithm
-        (xc, yc) = path[0] + np.array((max_v, max_h))
-        for (xt, yt) in path[1:] + np.array((max_v, max_h)):
-            dx  =  xt - xc
-            dy  =  yc - yt
-            err = dx + dy
-            while xc != xt or yc != yt:
-                mask[xc-buffer:xc+buffer+1, yc] = True
-                mask[xc, yc-buffer:yc+buffer+1] = True
-                e = 2 * err
-                if e > dy:
-                    err += dy
-                    xc  += 1
-                if e < dx:
-                    err += dx
-                    yc  += 1
-        mask[xt-buffer:xt+buffer+1, yt] = True
-        mask[xt, yt-buffer:yt+buffer+1] = True
-        
-        # Add path
-        ki += 1
-        paths.append(path)
-    return paths, d
-
-@njit(cache=True)
-def affinity_matrix_ndim(series1, series2, gamma=1.0, window=None, only_triu=False):
-    n, m = len(series1), len(series2)
-
-    if window is None:
-        window = max(n, m)
-
-    am = np.zeros((n, m))
-    for i in range(n):
-
-        j_start = max(0, i - max(0, n - m) - window + 1)
-        if only_triu:
-            j_start = max(i, j_start)
-
-        j_end   = min(m, i + max(0, m - n) + window)
-
-        affinities = np.exp(-gamma * np.sum(np.power(series1[i, :] - series2[j_start:j_end, :], 2), axis=1))
-        am[i, j_start:j_end] = affinities
-
-    return am
-
-@njit(cache=True)
-def to_segments(bit_array):
-    diff = np.diff(bit_array)
-    ss = np.flatnonzero(diff ==  1) + 1
-    es = np.flatnonzero(diff == -1) + 1
-    if bit_array[0]:
-        ss = np.concatenate((np.zeros(1, dtype=np.int32), ss))
-    if bit_array[-1]:
-        n = len(bit_array)
-        es = np.concatenate((es, n * np.ones(1, dtype=np.int32)))
-    return np.vstack((ss, es)).T
 
 # @njit(cache=True)
 def split_start_mask(n, start_mask, nb_masks):
