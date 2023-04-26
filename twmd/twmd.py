@@ -9,7 +9,12 @@ from numba.typed import List
 
 from dtaidistance import dtw_visualisation as dtwvis
 
-def twmd(series, rho, l_min, l_max, nb_motifs, overlap=0.5):
+def twmd(series, rho, l_min, l_max, nb_motifs, start_mask=None, end_mask=None, overlap=0.5):
+    if start_mask is None:
+        start_mask = np.full(len(series), True)
+    if end_mask is None:
+        end_mask   = np.full(len(series), True)
+
     gamma = 1
 
     if series.ndim == 1:
@@ -20,20 +25,16 @@ def twmd(series, rho, l_min, l_max, nb_motifs, overlap=0.5):
 
     delta = -2*tau
     delta_factor = 0.5
-
     step_sizes = np.array([(1, 1), (2, 1), (1, 2)])
 
     mdi = TWMD(series=series, gamma=gamma, tau=tau, delta=delta, delta_factor=delta_factor, l_min=l_min, l_max=l_max, step_sizes=step_sizes)
     mdi._am = am
     mdi.align()
     mdi.kbest_paths(buffer=max(10, l_min // 2))
-    motif_sets = mdi.kbest_motif_sets(k=nb_motifs, allowed_overlap=overlap)
-    motif_sets = [subsqs for (_, subsqs) in motif_sets]
+    motif_sets = []
+    for (_, subsqs), _ in mdi.kbest_motif_sets(k=nb_motifs, allowed_overlap=overlap, start_mask=start_mask, end_mask=end_mask):
+        motif_sets.append(subsqs)
     return motif_sets
-
-
-
-
 
 
 class TWMD:
@@ -82,7 +83,7 @@ class TWMD:
         mask[np.triu_indices(len(mask), k=buffer)] = False
 
         # hardcode diagonal
-        paths, _ = _kbest_paths(self._cam, k, mask, l_min=self.l_min, buffer=buffer, step_sizes=self.step_sizes)
+        paths = _kbest_paths(self._cam, k, mask, l_min=self.l_min, buffer=buffer, step_sizes=self.step_sizes)
         diagonal = np.vstack(np.diag_indices(len(self.series))).T
 
         # self._paths = List()
@@ -109,7 +110,7 @@ class TWMD:
         return row_projections(induced_paths)
 
     def calculate_fitnesses(self, start_mask, end_mask, mask, allowed_overlap=0, pruning=True):  
-        fitnesses = _calculate_fitnesses(start_mask, end_mask, mask, n=len(self.series), paths=self._paths, l_min=self.l_min, l_max=self.l_max, allowed_overlap=allowed_overlap, pruning=pruning)
+        fitnesses = _calculate_fitnesses(start_mask, end_mask, mask, paths=self._paths, l_min=self.l_min, l_max=self.l_max, allowed_overlap=allowed_overlap, pruning=pruning)
         return np.array(fitnesses)
     
     def calculate_fitnesses_parallel(self, start_mask, end_mask, mask, allowed_overlap=0, pruning=True, nb_processes=4):
@@ -117,8 +118,8 @@ class TWMD:
         import functools
 
         n = len(self.series)
-        # _calculate_fitnesses(start_mask, end_mask, mask, n, paths, l_min, l_max, allowed_overlap=0, pruning=True)
-        f = functools.partial(_calculate_fitnesses, end_mask=end_mask, mask=mask, n=n, paths=self._paths, l_min=self.l_min, l_max=self.l_max, allowed_overlap=allowed_overlap, pruning=pruning)
+        # _calculate_fitnesses(start_mask, end_mask, mask, paths, l_min, l_max, allowed_overlap=0, pruning=True)
+        f = functools.partial(_calculate_fitnesses, end_mask=end_mask, mask=mask, paths=self._paths, l_min=self.l_min, l_max=self.l_max, allowed_overlap=allowed_overlap, pruning=pruning)
 
         # decompose the start mask, each mask should have approximately the same number of zeros
         pool    = mp.Pool(nb_processes)
@@ -137,9 +138,9 @@ class TWMD:
         n = len(self.series)
         # handle masks
         if start_mask is None:
-            start_mask = np.full(n, False)
+            start_mask = np.full(n, True)
         if end_mask is None:
-            end_mask   = np.full(n, False)
+            end_mask   = np.full(n, True)
         if mask is None:
             mask       = np.full(n, False)
 
@@ -148,21 +149,21 @@ class TWMD:
             dmask[path[0][1]:path[-1][1]+1] = False
         mask = np.logical_or(mask, dmask)
         
-        start_mask[-self.l_min+1:] = True
-        end_mask[:self.l_min]      = True
+        start_mask[-self.l_min+1:] = False
+        end_mask[:self.l_min]      = False
 
         # iteratively find best motif sets
         kc = 0
         while (k is None or kc < k):
 
-            if np.all(mask) or np.all(start_mask) or np.all(end_mask):
+            if np.all(mask) or not np.any(start_mask) or not np.any(end_mask):
                 break
 
-            start_mask[mask] = True
-            end_mask[mask]   = True
+            start_mask[mask] = False
+            end_mask[mask]   = False
         
-            fitnesses = self.calculate_fitnesses(start_mask, end_mask, mask, allowed_overlap=allowed_overlap, pruning=pruning)
-            # fitnesses = self.calculate_fitnesses_parallel(start_mask, end_mask, mask, allowed_overlap=allowed_overlap, pruning=pruning)
+            # fitnesses = self.calculate_fitnesses(start_mask, end_mask, mask, allowed_overlap=allowed_overlap, pruning=pruning)
+            fitnesses = self.calculate_fitnesses_parallel(start_mask, end_mask, mask, allowed_overlap=allowed_overlap, pruning=pruning)
 
             if len(fitnesses) == 0:
                 break
@@ -302,12 +303,12 @@ def _kbest_paths(d, k, mask, l_min=2, buffer=0, step_sizes=np.array([[1, 1], [1,
             while (mask[rs[i], cs[i]]):
                 i -= 1
                 if i < 0:
-                    return paths, d
+                    return paths
 
             r, c = rs[i], cs[i]
 
             if r < max_v or c < max_h:
-                return paths, d
+                return paths
             
             path = max_warping_path(d, mask, r, c, step_sizes=step_sizes)
             for (x, y) in path:
@@ -338,7 +339,7 @@ def _kbest_paths(d, k, mask, l_min=2, buffer=0, step_sizes=np.array([[1, 1], [1,
         # Add path
         ki += 1
         paths.append(path)
-    return paths, d
+    return paths
 
 # @njit(cache=True)
 def _induced_paths(s, e, series, paths, mask, l_min, l_max):
@@ -358,9 +359,11 @@ def _induced_paths(s, e, series, paths, mask, l_min, l_max):
 
 # @njit(cache=True, parallel=True)
 # @njit(cache=True)
-def _calculate_fitnesses(start_mask, end_mask, mask, n, paths, l_min, l_max, allowed_overlap=0, pruning=True):
-    ss = np.where(start_mask == False)[0]
+def _calculate_fitnesses(start_mask, end_mask, mask, paths, l_min, l_max, allowed_overlap=0, pruning=True):
+    ss = np.where(start_mask == True)[0]
     fitnesses = []
+
+    n = len(start_mask)
 
     css = np.array([path.cs for path in paths])
     ces = np.array([path.ce for path in paths])
@@ -384,7 +387,7 @@ def _calculate_fitnesses(start_mask, end_mask, mask, n, paths, l_min, l_max, all
 
         for e in range(s + l_min, min(n + 1, s + l_max + 1)):
             
-            if end_mask[e-1]:
+            if not end_mask[e-1]:
                 continue
 
             if np.any(mask[s:e]):
@@ -538,15 +541,15 @@ def max_warping_path(d, mask, r, c, step_sizes=np.array([[1, 1], [1, 0], [0, 1]]
 
 # @njit(cache=True)
 def split_start_mask(n, start_mask, nb_masks):
-    start_mask_matrix = np.full((nb_masks, n), True)
-    nb  = np.sum(~start_mask)
+    start_mask_matrix = np.full((nb_masks, n), False)
+    nb  = np.sum(start_mask)
 
     cnt = 0
     i   = 0
     s   = 0
 
     for e in range(n):
-        cnt += int(~start_mask[e])
+        cnt += int(start_mask[e])
         if cnt == np.ceil(nb / nb_masks):
             start_mask_matrix[i, s:e] = start_mask[s:e] 
             cnt = 0
