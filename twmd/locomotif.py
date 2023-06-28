@@ -4,42 +4,44 @@ from cycler import cycler
 
 from numba import int32, float64
 from numba import njit
-from numba.experimental import jitclass
 from numba.typed import List
+from numba.experimental import jitclass
+
 
 from dtaidistance import dtw_visualisation as dtwvis
 
-def twmd(series, rho, l_min, l_max, nb_motifs, start_mask=None, end_mask=None, overlap=0.5):
+def apply_locomotif(series, rho, l_min, l_max, nb_motifs, start_mask=None, end_mask=None, overlap=0.5, warping=True):
     if start_mask is None:
         start_mask = np.full(len(series), True)
     if end_mask is None:
         end_mask   = np.full(len(series), True)
 
-    gamma = 1
-
     if series.ndim == 1:
         series = np.expand_dims(series, axis=1)
 
-    am  = affinity_matrix_ndim(series, series, gamma, only_triu=True)
-    tau = estimate_tau_from_am(am, rho)
+    gamma = 1
+    sm  = similarity_matrix_ndim(series, series, gamma, only_triu=True)
+    tau = estimate_tau_from_am(sm, rho)
 
     delta = -2*tau
     delta_factor = 0.5
-    step_sizes = np.array([(1, 1), (2, 1), (1, 2)])
+    step_sizes = np.array([(1, 1), (2, 1), (1, 2)]) if warping else np.array([(1, 1)])
 
-    mdi = TWMD(series=series, gamma=gamma, tau=tau, delta=delta, delta_factor=delta_factor, l_min=l_min, l_max=l_max, step_sizes=step_sizes)
-    mdi._am = am
-    mdi.align()
-    mdi.kbest_paths(buffer=max(10, l_min // 2))
+    # TODO: z-normalize the time series
+
+    locomotif = LoCoMotif(series=series, gamma=gamma, tau=tau, delta=delta, delta_factor=delta_factor, l_min=l_min, l_max=l_max, step_sizes=step_sizes)
+    locomotif._sm = sm
+    locomotif.align()
+    locomotif.kbest_paths(buffer=max(10, l_min // 2))
     motif_sets = []
-    for (_, subsqs), _ in mdi.kbest_motif_sets(k=nb_motifs, allowed_overlap=overlap, start_mask=start_mask, end_mask=end_mask):
+    for (_, subsqs), _ in locomotif.kbest_motif_sets(k=nb_motifs, allowed_overlap=overlap, start_mask=start_mask, end_mask=end_mask, pruning=False):
         motif_sets.append(subsqs)
     return motif_sets
 
 
-class TWMD:
+class LoCoMotif:
 
-    def __init__(self, series, gamma=1.0, tau=0.0, delta=0.0, delta_factor=0.5, l_min=4, l_max=None, step_sizes=None):
+    def __init__(self, series, gamma=1.0, tau=0.5, delta=0.5, delta_factor=0.5, l_min=5, l_max=None, step_sizes=None):
         if step_sizes is None:
             step_sizes = [(1, 1), (1, 0), (0, 1)]
         if l_max is None:
@@ -59,55 +61,51 @@ class TWMD:
         self.delta = delta
         self.delta_factor = delta_factor
         # Cumulative similiarity matrix
-        self._cam = None
+        self._csm = None
         # Self similarity matrix
-        self._am = None
+        self._sm = None
         # LC Paths
         self._paths = None
 
     def align(self):
-        if self._am is None:
-            self._am  = affinity_matrix_ndim(self.series, self.series, gamma=self.gamma, only_triu=True)
-        if self._cam is None:
-            self._cam = cumulative_affinity_matrix(self._am, tau=self.tau, delta=self.delta, delta_factor=self.delta_factor, step_sizes=self.step_sizes, only_triu=True)
+        if self._sm is None:
+            self._sm  = similarity_matrix_ndim(self.series, self.series, gamma=self.gamma, only_triu=True)
+        if self._csm is None:
+            self._csm = cumulative_similarity_matrix(self._sm, tau=self.tau, delta=self.delta, delta_factor=self.delta_factor, step_sizes=self.step_sizes, only_triu=True)
 
     def kbest_paths(self, buffer, k=None):
         if buffer is None:
             buffer = self.l_min // 2
 
-        if self._cam is None:
+        if self._csm is None:
             self.align()
 
-        # mask region as if diagonal calculated
-        mask = np.full(self._cam.shape, True)
+        # mask region as if diagonal is already found as a path
+        mask = np.full(self._csm.shape, True)
         mask[np.triu_indices(len(mask), k=buffer)] = False
 
-        # hardcode diagonal
-        paths = _kbest_paths(self._cam, k, mask, l_min=self.l_min, buffer=buffer, step_sizes=self.step_sizes)
-        diagonal = np.vstack(np.diag_indices(len(self.series))).T
+        paths = _kbest_paths(self._csm, k, mask, l_min=self.l_min, buffer=buffer, step_sizes=self.step_sizes)
 
-        # self._paths = List()
-        self._paths = []
+        # hardcode diagonal (needed if step_sizes = [(1, 1), (0, 1), (1, 0)])
+        diagonal = np.vstack(np.diag_indices(len(self.series))).astype(np.int32).T
+        self._paths = List()
+        # self._paths = []
         self._paths.append(Path(diagonal, np.ones(len(diagonal))))
         
         for path in paths:
             r, c = path[:, 0], path[:, 1]
-            affs = self._am[r, c]
-            self._paths.append(Path(path, affs))
+            path_similarities = self._sm[r, c]
+            self._paths.append(Path(path, path_similarities))
             # also add mirrored path here
             path_mirrored = np.zeros(path.shape, dtype=np.int32)
             path_mirrored[:, 0] = np.copy(path[:, 1])
             path_mirrored[:, 1] = np.copy(path[:, 0])
-            self._paths.append(Path(path_mirrored, affs))
+            self._paths.append(Path(path_mirrored, path_similarities))
 
         return self._paths
 
     def induced_paths(self, s, e, mask=None):
-        return _induced_paths(s, e, self.series, self._paths, mask, self.l_min, self.l_max)
-
-    def induced_segments(self, s, e, mask=None):
-        induced_paths = self.induced_paths(s, e, mask)
-        return row_projections(induced_paths)
+        return _induced_paths(s, e, self.series, self._paths, mask)
 
     def calculate_fitnesses(self, start_mask, end_mask, mask, allowed_overlap=0, pruning=True):  
         fitnesses = _calculate_fitnesses(start_mask, end_mask, mask, paths=self._paths, l_min=self.l_min, l_max=self.l_max, allowed_overlap=allowed_overlap, pruning=pruning)
@@ -133,8 +131,9 @@ class TWMD:
             fitnesses = np.vstack(fitnesses)
         return np.array(fitnesses)
     
+
     # iteratively finds the best motif
-    def kbest_motif_sets(self, k=None, start_mask=None, end_mask=None, mask=None, allowed_overlap=0, pruning=True):
+    def kbest_motif_sets(self, k=None, start_mask=None, end_mask=None, mask=None, allowed_overlap=0, pruning=False):
         n = len(self.series)
         # handle masks
         if start_mask is None:
@@ -143,14 +142,6 @@ class TWMD:
             end_mask   = np.full(n, True)
         if mask is None:
             mask       = np.full(n, False)
-
-        dmask = np.full(n, True)
-        for path in self._paths[1:]:
-            dmask[path[0][1]:path[-1][1]+1] = False
-        mask = np.logical_or(mask, dmask)
-        
-        start_mask[-self.l_min+1:] = False
-        end_mask[:self.l_min]      = False
 
         # iteratively find best motif sets
         kc = 0
@@ -162,25 +153,24 @@ class TWMD:
             start_mask[mask] = False
             end_mask[mask]   = False
         
-            # fitnesses = self.calculate_fitnesses(start_mask, end_mask, mask, allowed_overlap=allowed_overlap, pruning=pruning)
-            fitnesses = self.calculate_fitnesses_parallel(start_mask, end_mask, mask, allowed_overlap=allowed_overlap, pruning=pruning)
+            fitnesses = self.calculate_fitnesses(start_mask, end_mask, mask, allowed_overlap=allowed_overlap, pruning=pruning)
+            # fitnesses = self.calculate_fitnesses_parallel(start_mask, end_mask, mask, allowed_overlap=allowed_overlap, pruning=pruning)
 
             if len(fitnesses) == 0:
                 break
 
-            # best motif
+            # best candidate
             i_best = np.argmax(fitnesses[:, 2])
             best = fitnesses[i_best]
 
             (s, e) = int(best[0]), int(best[1])
-            segs = row_projections(_induced_paths(s, e, self.series, self._paths, mask, self.l_min, self.l_max))
-            for (s_seg, e_seg) in segs:
-                l_occ = e_seg - s_seg
-                # if overlap = 0.5, ensure one single t to be masked
-                mask[s_seg + int(allowed_overlap * l_occ) - 1 : e_seg - int(allowed_overlap * l_occ)] = True
+            induced_segments = row_projections(_induced_paths(s, e, self.series, self._paths, mask))
+            for (s_seg, e_seg) in induced_segments:
+                l = e_seg - s_seg
+                mask[s_seg + int(allowed_overlap * l) - 1 : e_seg - int(allowed_overlap * l)] = True
 
             kc += 1
-            yield (best, segs), fitnesses
+            yield (best, induced_segments), fitnesses
             
 
     # requires dtaidistance
@@ -188,14 +178,14 @@ class TWMD:
         import dtaidistance.dtw_visualisation as dtwvis
         max_v = np.amax(self.step_sizes[:, 0])
         max_h = np.amax(self.step_sizes[:, 1])
-        cam = self._cam
+        cam = self._csm
         cam = cam + cam.T - np.diag(np.diag(cam))
         # fig, ax = dtwvis.plot_warpingpaths(self.series, self.series, self._cam[max_h - 1:, max_v - 1:], path=-1)
         rgb_cycler = cycler(color=[u'#00407a', u'#2ca02c', u'#c00000'])
         fig, ax = dtwvis.plot_warpingpaths(self.series, self.series, cam[max_h - 1:, max_v - 1:], path=-1, cycler=rgb_cycler, matshow_kwargs={'cmap':'viridis'})
-        for p in self._paths:
+        for path in self._paths:
             # dtwvis.plot_warpingpaths_addpath(ax, p.path)
-            dtwvis.plot_warpingpaths_addpath(ax, p.path, style='-')
+            dtwvis.plot_warpingpaths_addpath(ax, path.path, style='-')
         return fig, ax
 
     # requires dtaidistance
@@ -221,13 +211,14 @@ def estimate_tau_from_am(am, rho):
     tau = np.quantile(am[np.triu_indices(len(am))], rho, axis=None)
     return tau
         
-# @jitclass([("path", int32[:, :]), ("sims", float64[:]), ("row_index", int32[:]), ("col_index", int32[:]), ("rs", int32), ("re", int32), ("cs", int32), ("ce", int32)])
+@jitclass([("path", int32[:, :]), ("sim", float64[:]), ("cumsim", float64[:]), ("row_index", int32[:]), ("col_index", int32[:]), ("rs", int32), ("re", int32), ("cs", int32), ("ce", int32)])
 class Path:
 
-    def __init__(self, path, sims):
-        assert len(path) == len(sims)
+    def __init__(self, path, sim):
+        assert len(path) == len(sim)
         self.path = path
-        self.sims = sims.astype(np.float64)
+        self.sim = sim.astype(np.float64)
+        self.cumsim = np.concatenate((np.array([0.0]), np.cumsum(sim)))
         self.rs = path[0][0]
         self.re = path[len(path) - 1][0] + 1
         self.cs = path[0][1]
@@ -274,11 +265,11 @@ class Path:
 
 
 @njit(cache=True)
-def _kbest_paths(d, k, mask, l_min=2, buffer=0, step_sizes=np.array([[1, 1], [1, 0], [0, 1]])):
+def _kbest_paths(d, k, mask, l_min=2, buffer=10, step_sizes=np.array([[1, 1], [1, 0], [0, 1]])):
     max_v = max(step_sizes[:, 0])
     max_h = max(step_sizes[:, 1])
 
-    rs, cs = np.nonzero(d == 0)
+    rs, cs = np.nonzero(d <= 0)
     for i in range(len(rs)):
         mask[rs[i], cs[i]] = True
 
@@ -306,7 +297,6 @@ def _kbest_paths(d, k, mask, l_min=2, buffer=0, step_sizes=np.array([[1, 1], [1,
                     return paths
 
             r, c = rs[i], cs[i]
-
             if r < max_v or c < max_h:
                 return paths
             
@@ -342,7 +332,7 @@ def _kbest_paths(d, k, mask, l_min=2, buffer=0, step_sizes=np.array([[1, 1], [1,
     return paths
 
 # @njit(cache=True)
-def _induced_paths(s, e, series, paths, mask, l_min, l_max):
+def _induced_paths(s, e, series, paths, mask):
     if mask is None:
         mask = np.full(len(series), False)
 
@@ -351,14 +341,14 @@ def _induced_paths(s, e, series, paths, mask, l_min, l_max):
         if p.cs <= s and e <= p.ce:
             pi, pj = p.find_col(s), p.find_col(e-1)
             s_i, e_i = p[pi][0], p[pj][0] + 1
-            if not np.any(mask[s_i:e_i]): # and e_i - s_i >= l_min and e_i - s_i <= l_max:
+            if not np.any(mask[s_i:e_i]):
                 induced_path = np.copy(p.path[pi:pj+1])
                 induced_paths.append(induced_path)
 
     return induced_paths
 
 # @njit(cache=True, parallel=True)
-# @njit(cache=True)
+@njit(cache=True)
 def _calculate_fitnesses(start_mask, end_mask, mask, paths, l_min, l_max, allowed_overlap=0, pruning=True):
     ss = np.where(start_mask == True)[0]
     fitnesses = []
@@ -437,7 +427,7 @@ def _calculate_fitnesses(start_mask, end_mask, mask, paths, l_min, l_max, allowe
 
             score = 0
             for p in np.flatnonzero(pmask):
-                score += np.sum(paths[p].sims[pis[p]:pjs[p]+1])
+                score += paths[p].cumsim[pjs[p]+1] - paths[p].cumsim[pis[p]]
 
             n_score = (score - (e - s)) / float(np.sum(pjs[pmask] - pis[pmask] + 1))
 
@@ -451,24 +441,22 @@ def _calculate_fitnesses(start_mask, end_mask, mask, paths, l_min, l_max, allowe
 
     return fitnesses
 
-# project paths to the first axis
-# @njit(cache=True)
+# project paths to the vertical axis
 def row_projections(paths):
     return [(p[0][0], p[len(p)-1][0]+1) for p in paths]
 
-# project paths to the second axis
-# @njit(cache=True)
+# project paths to the horizontal axis
 def col_projections(paths):
     return [(p[0][1], p[len(p)-1][1]+1) for p in paths]
 
 @njit(cache=True)
-def affinity_matrix_ndim(series1, series2, gamma=1.0, window=None, only_triu=False):
+def similarity_matrix_ndim(series1, series2, gamma=1.0, window=None, only_triu=False):
     n, m = len(series1), len(series2)
 
     if window is None:
         window = max(n, m)
 
-    am = np.zeros((n, m))
+    sm = np.full((n, m), -np.inf)
     for i in range(n):
 
         j_start = max(0, i - max(0, n - m) - window + 1)
@@ -478,13 +466,13 @@ def affinity_matrix_ndim(series1, series2, gamma=1.0, window=None, only_triu=Fal
         j_end   = min(m, i + max(0, m - n) + window)
 
         affinities = np.exp(-gamma * np.sum(np.power(series1[i, :] - series2[j_start:j_end, :], 2), axis=1))
-        am[i, j_start:j_end] = affinities
+        sm[i, j_start:j_end] = affinities
 
-    return am
+    return sm
 
 @njit(cache=True)
-def cumulative_affinity_matrix(am, tau=0.0, delta=0.0, delta_factor=1.0, step_sizes=np.array([[1, 1], [1, 0], [0, 1]]), window=None, only_triu=False):
-    n, m = am.shape
+def cumulative_similarity_matrix(sm, tau=0.0, delta=0.0, delta_factor=1.0, step_sizes=np.array([[1, 1], [1, 0], [0, 1]]), window=None, only_triu=False):
+    n, m = sm.shape
 
     if window is None:
         window = max(n, m)
@@ -502,15 +490,15 @@ def cumulative_affinity_matrix(am, tau=0.0, delta=0.0, delta_factor=1.0, step_si
         j_end   = min(m, i + max(0, m - n) + window)
         
         for j in range(j_start, j_end):
-            aff     = am[i, j]
+            sim     = sm[i, j]
 
-            inds    = np.array([i + max_v, j + max_h]) - step_sizes
-            max_aff = np.amax(np.array([d[r, c] for (r, c) in inds]))
+            indices    = np.array([i + max_v, j + max_h]) - step_sizes
+            max_cumsim = np.amax(np.array([d[r, c] for (r, c) in indices]))
 
-            if aff < tau:
-                d[i + max_v, j + max_h] = max(0, delta + delta_factor * max_aff)
+            if sim < tau:
+                d[i + max_v, j + max_h] = max(0, delta + delta_factor * max_cumsim)
             else:
-                d[i + max_v, j + max_h] = max(0, aff + max_aff)
+                d[i + max_v, j + max_h] = max(0, sim + max_cumsim)
     return d
 
 
@@ -524,10 +512,10 @@ def max_warping_path(d, mask, r, c, step_sizes=np.array([[1, 1], [1, 0], [0, 1]]
 
         path.append((r - max_v, c - max_h))
 
-        inds = np.array([r, c]) - step_sizes
+        indices = np.array([r, c]) - step_sizes
 
-        values = np.array([d[i, j]    for (i, j) in inds])
-        masked = np.array([mask[i, j] for (i, j) in inds])
+        values = np.array([d[i, j]    for (i, j) in indices])
+        masked = np.array([mask[i, j] for (i, j) in indices])
         i_max = np.argmax(values)
 
         if masked[i_max]:

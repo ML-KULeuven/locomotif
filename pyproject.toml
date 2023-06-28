@@ -5,12 +5,13 @@ requires = ["setuptools>=61.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages    = ['twmd']
+packages    = ['locomotif']
 
 [project]
-name = "twmd"
+name = "locomotif"
 version = "0.0.0"
-description = "Time Warping Motif Discovery"
+description = "Discovering variable-length motif sets
+in multivariate time series using time warping"
 readme = "README.md"
 authors = [{ name = "Daan Van Wesenbeeck" }]
 license = { file = "LICENSE" }

@@ -16,7 +16,7 @@ def scape_plot(n, values, filename=None, colorbar=False, vmin=0, vmax=1):
     else:
         fig = plt.figure(figsize=figsize)
         ax = fig.add_axes(rect)
-        
+    
     image = np.full((n, n), -np.inf)
     for (s, e, value) in values:
         s, e = int(s), int(e)
@@ -54,7 +54,7 @@ def scape_plot(n, values, filename=None, colorbar=False, vmin=0, vmax=1):
     ax.set_xlim([x0-0.5-0.005*n, x1+0.5+0.005*n])
     ax.set_ylim([y0-0.5-0.005*n, y2+0.5+0.005*n])
     # Titles and labels
-    ax.set_title("Fitness", fontsize=16)
+    # ax.set_title("Fitness", fontsize=16)
     ax.set_xlabel(r"$center(\alpha)$", fontsize=13)
     ax.set_ylabel(r"$|\alpha|$", fontsize=13)
     ax.tick_params(axis='both', which='major', labelsize=13)

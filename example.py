@@ -2,8 +2,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 
-import twmd.twmd as twmd
-import twmd.visualize as visualize
+import locomotif.locomotif as locomotif
+import locomotif.visualize as visualize
 
 
 def main():
@@ -11,6 +11,8 @@ def main():
     path_to_series = os.path.join(".", "datasets", "ecg-heartbeat-av.csv")
     f = open(path_to_series)
     series = np.array(f.readlines(), dtype=np.double)
+
+    print(series.shape)
 
     # z-normalise time series
     series = (series - np.mean(series, axis=0)) / np.std(series, axis=0)
@@ -38,7 +40,7 @@ def main():
     start_mask = np.full(n, True)
     start_mask[:n//2] = False
 
-    motif_sets = twmd.twmd(series, rho, l_min, l_max, nb_motifs, overlap=overlap, start_mask=start_mask, end_mask=None)
+    motif_sets = locomotif.apply_locomotif(series, rho, l_min, l_max, nb_motifs, overlap=overlap, start_mask=start_mask, end_mask=None)
     print(motif_sets)
     fig, ax = visualize.plot_motif_sets(series, motif_sets)
     plt.savefig('example.png')
