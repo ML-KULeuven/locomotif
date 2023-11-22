@@ -9,7 +9,7 @@ packages    = ['locomotif']
 
 [project]
 name = "locomotif"
-version = "0.0.0"
+version = "1.0"
 description = "Discovering variable-length motif sets in multivariate time series using time warping"
 readme = "README.md"
 authors = [{ name = "Daan Van Wesenbeeck" }]
@@ -19,5 +19,8 @@ classifiers = [
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
 ]
-keywords = ["time series", "motif sets", "variable-length", "time warping"]
+keywords = ["time series", "motif sets", "variable-length", "time warping", "multivariate"]
 requires-python = ">=3.9"
+dependencies = [
+    'numba >= 0.30.0,
+]
