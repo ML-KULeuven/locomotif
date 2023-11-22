@@ -23,4 +23,5 @@ keywords = ["time series", "motif sets", "variable-length", "time warping", "mul
 requires-python = ">=3.9"
 dependencies = [
     'numba >= 0.30.0',
+    'matplotlib >=3.0, < 4.0',
 ]
