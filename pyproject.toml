@@ -10,8 +10,7 @@ packages    = ['locomotif']
 [project]
 name = "locomotif"
 version = "0.0.0"
-description = "Discovering variable-length motif sets
-in multivariate time series using time warping"
+description = "Discovering variable-length motif sets in multivariate time series using time warping"
 readme = "README.md"
 authors = [{ name = "Daan Van Wesenbeeck" }]
 license = { file = "LICENSE" }
