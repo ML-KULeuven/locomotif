@@ -8,5 +8,9 @@ setup(
     url='https://github.com/daanvw/locomotif',
     author='daanv',
     author_email='daan.vanwesenbeeck@kuleuven.be',
-    keywords=['time series', 'motif sets', 'variable-length', 'multivariate', 'time warping']
+    keywords=['time series', 'motif sets', 'variable length', 'multivariate', 'time warping'],
+    install_requires=[
+          'numpy',
+          'matplotlib'
+      ],
 )
