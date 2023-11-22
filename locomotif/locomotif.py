@@ -1,14 +1,9 @@
 import numpy as np
 
-from cycler import cycler
-
 from numba import int32, float64
 from numba import njit
 from numba.typed import List
 from numba.experimental import jitclass
-
-
-from dtaidistance import dtw_visualisation as dtwvis
 
 def apply_locomotif(series, rho, l_min, l_max, nb_motifs, start_mask=None, end_mask=None, overlap=0.5, warping=True):
     if start_mask is None:
@@ -23,27 +18,25 @@ def apply_locomotif(series, rho, l_min, l_max, nb_motifs, start_mask=None, end_m
     sm  = similarity_matrix_ndim(series, series, gamma, only_triu=True)
     tau = estimate_tau_from_am(sm, rho)
 
-    delta = -2*tau
-    delta_factor = 0.5
+    delta_a = -2*tau
+    delta_m = 0.5
     step_sizes = np.array([(1, 1), (2, 1), (1, 2)]) if warping else np.array([(1, 1)])
 
-    # TODO: z-normalize the time series
-
-    locomotif = LoCoMotif(series=series, gamma=gamma, tau=tau, delta=delta, delta_factor=delta_factor, l_min=l_min, l_max=l_max, step_sizes=step_sizes)
+    locomotif = LoCoMotif(series=series, gamma=gamma, tau=tau, delta_a=delta_a, delta_m=delta_m, l_min=l_min, l_max=l_max, step_sizes=step_sizes)
     locomotif._sm = sm
     locomotif.align()
-    locomotif.kbest_paths(buffer=max(10, l_min // 2))
+    locomotif.kbest_paths(vwidth=max(10, l_min // 2))
     motif_sets = []
-    for (_, subsqs), _ in locomotif.kbest_motif_sets(k=nb_motifs, allowed_overlap=overlap, start_mask=start_mask, end_mask=end_mask, pruning=False):
-        motif_sets.append(subsqs)
+    for (_, motif_set), _ in locomotif.kbest_motif_sets(nb=nb_motifs, allowed_overlap=overlap, start_mask=start_mask, end_mask=end_mask, pruning=False):
+        motif_sets.append(motif_set)
     return motif_sets
 
 
 class LoCoMotif:
 
-    def __init__(self, series, gamma=1.0, tau=0.5, delta=0.5, delta_factor=0.5, l_min=5, l_max=None, step_sizes=None):
+    def __init__(self, series, gamma=1.0, tau=0.5, delta_a=0.5, delta_m=0.5, l_min=5, l_max=None, step_sizes=None):
         if step_sizes is None:
-            step_sizes = [(1, 1), (1, 0), (0, 1)]
+            step_sizes = [(1, 1), (2, 1), (1, 2)]
         if l_max is None:
             l_max = len(series)
 
@@ -58,8 +51,8 @@ class LoCoMotif:
         # LC args
         self.gamma = gamma
         self.tau = tau
-        self.delta = delta
-        self.delta_factor = delta_factor
+        self.delta_a = delta_a
+        self.delta_m = delta_m
         # Cumulative similiarity matrix
         self._csm = None
         # Self similarity matrix
@@ -71,20 +64,20 @@ class LoCoMotif:
         if self._sm is None:
             self._sm  = similarity_matrix_ndim(self.series, self.series, gamma=self.gamma, only_triu=True)
         if self._csm is None:
-            self._csm = cumulative_similarity_matrix(self._sm, tau=self.tau, delta=self.delta, delta_factor=self.delta_factor, step_sizes=self.step_sizes, only_triu=True)
+            self._csm = cumulative_similarity_matrix(self._sm, tau=self.tau, delta_a=self.delta_a, delta_m=self.delta_m, step_sizes=self.step_sizes, only_triu=True)
 
-    def kbest_paths(self, buffer, k=None):
-        if buffer is None:
-            buffer = self.l_min // 2
+    def kbest_paths(self, vwidth, nbp=None):
+        if vwidth is None:
+            vwidth = self.l_min // 2
 
         if self._csm is None:
             self.align()
 
         # mask region as if diagonal is already found as a path
         mask = np.full(self._csm.shape, True)
-        mask[np.triu_indices(len(mask), k=buffer)] = False
+        mask[np.triu_indices(len(mask), k=vwidth)] = False
 
-        paths = _kbest_paths(self._csm, k, mask, l_min=self.l_min, buffer=buffer, step_sizes=self.step_sizes)
+        paths = _kbest_paths(self._csm, nbp, mask, l_min=self.l_min, vwidth=vwidth, step_sizes=self.step_sizes)
 
         # hardcode diagonal (needed if step_sizes = [(1, 1), (0, 1), (1, 0)])
         diagonal = np.vstack(np.diag_indices(len(self.series))).astype(np.int32).T
@@ -93,8 +86,8 @@ class LoCoMotif:
         self._paths.append(Path(diagonal, np.ones(len(diagonal))))
         
         for path in paths:
-            r, c = path[:, 0], path[:, 1]
-            path_similarities = self._sm[r, c]
+            i, j = path[:, 0], path[:, 1]
+            path_similarities = self._sm[i, j]
             self._paths.append(Path(path, path_similarities))
             # also add mirrored path here
             path_mirrored = np.zeros(path.shape, dtype=np.int32)
@@ -104,36 +97,36 @@ class LoCoMotif:
 
         return self._paths
 
-    def induced_paths(self, s, e, mask=None):
-        return _induced_paths(s, e, self.series, self._paths, mask)
+    def induced_paths(self, b, e, mask=None):
+        return _induced_paths(b, e, self.series, self._paths, mask)
 
     def calculate_fitnesses(self, start_mask, end_mask, mask, allowed_overlap=0, pruning=True):  
         fitnesses = _calculate_fitnesses(start_mask, end_mask, mask, paths=self._paths, l_min=self.l_min, l_max=self.l_max, allowed_overlap=allowed_overlap, pruning=pruning)
         return np.array(fitnesses)
     
-    def calculate_fitnesses_parallel(self, start_mask, end_mask, mask, allowed_overlap=0, pruning=True, nb_processes=4):
-        import multiprocessing as mp
-        import functools
+    # def calculate_fitnesses_parallel(self, start_mask, end_mask, mask, allowed_overlap=0, pruning=True, nb_processes=4):
+    #     import multiprocessing as mp
+    #     import functools
 
-        n = len(self.series)
-        # _calculate_fitnesses(start_mask, end_mask, mask, paths, l_min, l_max, allowed_overlap=0, pruning=True)
-        f = functools.partial(_calculate_fitnesses, end_mask=end_mask, mask=mask, paths=self._paths, l_min=self.l_min, l_max=self.l_max, allowed_overlap=allowed_overlap, pruning=pruning)
+    #     n = len(self.series)
+    #     # _calculate_fitnesses(start_mask, end_mask, mask, paths, l_min, l_max, allowed_overlap=0, pruning=True)
+    #     f = functools.partial(_calculate_fitnesses, end_mask=end_mask, mask=mask, paths=self._paths, l_min=self.l_min, l_max=self.l_max, allowed_overlap=allowed_overlap, pruning=pruning)
 
-        # decompose the start mask, each mask should have approximately the same number of zeros
-        pool    = mp.Pool(nb_processes)
-        results = pool.map(f, [row for row in split_start_mask(n, start_mask, nb_processes)])
-        pool.close()
-        pool.join()
+    #     # decompose the start mask, each mask should have approximately the same number of zeros
+    #     pool    = mp.Pool(nb_processes)
+    #     results = pool.map(f, [row for row in split_start_mask(n, start_mask, nb_processes)])
+    #     pool.close()
+    #     pool.join()
 
-        # combine the results
-        fitnesses = [fitness for result in results for fitness in result]
-        if fitnesses:
-            fitnesses = np.vstack(fitnesses)
-        return np.array(fitnesses)
+    #     # combine the results
+    #     fitnesses = [fitness for result in results for fitness in result]
+    #     if fitnesses:
+    #         fitnesses = np.vstack(fitnesses)
+    #     return np.array(fitnesses)
     
 
     # iteratively finds the best motif
-    def kbest_motif_sets(self, k=None, start_mask=None, end_mask=None, mask=None, allowed_overlap=0, pruning=False):
+    def kbest_motif_sets(self, nb=None, start_mask=None, end_mask=None, mask=None, allowed_overlap=0, pruning=False):
         n = len(self.series)
         # handle masks
         if start_mask is None:
@@ -144,8 +137,8 @@ class LoCoMotif:
             mask       = np.full(n, False)
 
         # iteratively find best motif sets
-        kc = 0
-        while (k is None or kc < k):
+        current_nb = 0
+        while (nb is None or current_nb < nb):
 
             if np.all(mask) or not np.any(start_mask) or not np.any(end_mask):
                 break
@@ -163,37 +156,15 @@ class LoCoMotif:
             i_best = np.argmax(fitnesses[:, 2])
             best = fitnesses[i_best]
 
-            (s, e) = int(best[0]), int(best[1])
-            induced_segments = row_projections(_induced_paths(s, e, self.series, self._paths, mask))
-            for (s_seg, e_seg) in induced_segments:
-                l = e_seg - s_seg
-                mask[s_seg + int(allowed_overlap * l) - 1 : e_seg - int(allowed_overlap * l)] = True
+            (b, e) = int(best[0]), int(best[1])
+            motif_set = vertical_projections(_induced_paths(b, e, self.series, self._paths, mask))
+            for (bm, em) in motif_set:
+                l = em - bm
+                mask[bm + int(allowed_overlap * l) - 1 : em - int(allowed_overlap * l)] = True
 
-            kc += 1
-            yield (best, induced_segments), fitnesses
+            current_nb += 1
+            yield (best, motif_set), fitnesses
             
-
-    # requires dtaidistance
-    def plot_lc(self):
-        import dtaidistance.dtw_visualisation as dtwvis
-        max_v = np.amax(self.step_sizes[:, 0])
-        max_h = np.amax(self.step_sizes[:, 1])
-        cam = self._csm
-        cam = cam + cam.T - np.diag(np.diag(cam))
-        # fig, ax = dtwvis.plot_warpingpaths(self.series, self.series, self._cam[max_h - 1:, max_v - 1:], path=-1)
-        rgb_cycler = cycler(color=[u'#00407a', u'#2ca02c', u'#c00000'])
-        fig, ax = dtwvis.plot_warpingpaths(self.series, self.series, cam[max_h - 1:, max_v - 1:], path=-1, cycler=rgb_cycler, matshow_kwargs={'cmap':'viridis'})
-        for path in self._paths:
-            # dtwvis.plot_warpingpaths_addpath(ax, p.path)
-            dtwvis.plot_warpingpaths_addpath(ax, path.path, style='-')
-        return fig, ax
-
-    # requires dtaidistance
-    def plot_lc_add_induced_paths(self, ax, s, e, mask=None, color='green'):
-        induced_paths = self.induced_paths(s, e, mask)
-        for p in induced_paths:
-            dtwvis.plot_warpingpaths_addpath(ax, p, color=color)
-        return ax
 
 # class ApproximateTWMD:
 def estimate_tau_from_std(series, f, gamma=None):
@@ -211,7 +182,7 @@ def estimate_tau_from_am(am, rho):
     tau = np.quantile(am[np.triu_indices(len(am))], rho, axis=None)
     return tau
         
-@jitclass([("path", int32[:, :]), ("sim", float64[:]), ("cumsim", float64[:]), ("row_index", int32[:]), ("col_index", int32[:]), ("rs", int32), ("re", int32), ("cs", int32), ("ce", int32)])
+@jitclass([("path", int32[:, :]), ("sim", float64[:]), ("cumsim", float64[:]), ("index_i", int32[:]), ("index_j", int32[:]), ("i1", int32), ("il", int32), ("j1", int32), ("jl", int32)])
 class Path:
 
     def __init__(self, path, sim):
@@ -219,10 +190,10 @@ class Path:
         self.path = path
         self.sim = sim.astype(np.float64)
         self.cumsim = np.concatenate((np.array([0.0]), np.cumsum(sim)))
-        self.rs = path[0][0]
-        self.re = path[len(path) - 1][0] + 1
-        self.cs = path[0][1]
-        self.ce = path[len(path) - 1][1] + 1
+        self.i1 = path[0][0]
+        self.il = path[len(path) - 1][0] + 1
+        self.j1 = path[0][1]
+        self.jl = path[len(path) - 1][1] + 1
         self._construct_index(path)
 
     def __getitem__(self, i):
@@ -232,75 +203,75 @@ class Path:
         return len(self.path)
 
     def _construct_index(self, path):
-        curr_row = path[0][0]
-        curr_col = path[0][1]
+        i_curr = path[0][0]
+        j_curr = path[0][1]
 
-        last_row = path[-1][0]
-        last_col = path[-1][1]
+        i_last = path[-1][0]
+        j_last = path[-1][1]
 
-        row_index = np.zeros(last_row - self.rs + 1, dtype=np.int32)
-        col_index = np.zeros(last_col - self.cs + 1, dtype=np.int32)
+        index_i = np.zeros(i_last - self.i1 + 1, dtype=np.int32)
+        index_j = np.zeros(j_last - self.j1 + 1, dtype=np.int32)
 
         for i in range(1, len(path)):
-            if path[i][0] != curr_row:
-                row_index[curr_row - self.rs + 1 : path[i][0] - self.rs + 1] = i
-                curr_row = path[i][0]
+            if path[i][0] != i_curr:
+                index_i[i_curr - self.i1 + 1 : path[i][0] - self.i1 + 1] = i
+                i_curr = path[i][0]
 
-            if path[i][1] != curr_col:
-                col_index[curr_col - self.cs + 1 : path[i][1] - self.cs + 1] = i
-                curr_col = path[i][1]
+            if path[i][1] != j_curr:
+                index_j[j_curr - self.j1 + 1 : path[i][1] - self.j1 + 1] = i
+                j_curr = path[i][1]
         
-        self.row_index = row_index
-        self.col_index = col_index
+        self.index_i = index_i
+        self.index_j = index_j
 
     # returns the index of the first occurrence of the given row
-    def find_row(self, row):
-        assert row - self.rs >= 0 and row - self.rs < len(self.row_index)
-        return self.row_index[row - self.rs]
+    def find_i(self, i):
+        assert i - self.i1 >= 0 and i - self.i1 < len(self.index_i)
+        return self.index_i[i - self.i1]
 
     # returns the index of the first occurrence of the given column
-    def find_col(self, col):
-        assert col - self.cs >= 0 and col - self.cs < len(self.col_index)
-        return self.col_index[col - self.cs]
+    def find_j(self, j):
+        assert j - self.j1 >= 0 and j - self.j1 < len(self.index_j)
+        return self.index_j[j - self.j1]
 
 
 @njit(cache=True)
-def _kbest_paths(d, k, mask, l_min=2, buffer=10, step_sizes=np.array([[1, 1], [1, 0], [0, 1]])):
+def _kbest_paths(d, nbp, mask, l_min=2, vwidth=10, step_sizes=np.array([[1, 1], [2, 1], [1, 2]])):
     max_v = max(step_sizes[:, 0])
     max_h = max(step_sizes[:, 1])
 
-    rs, cs = np.nonzero(d <= 0)
-    for i in range(len(rs)):
-        mask[rs[i], cs[i]] = True
+    is_, js_ = np.nonzero(d <= 0)
+    for index_best in range(len(is_)):
+        mask[is_[index_best], js_[index_best]] = True
 
-    rs, cs = np.nonzero(d)
-    values = np.array([d[rs[i], cs[i]] for i in range(len(rs))])
+    is_, js_ = np.nonzero(d)
+    values = np.array([d[is_[i], js_[i]] for i in range(len(is_))])
     
     perm = np.argsort(values)
-    rs = rs[perm]
-    cs = cs[perm]
+    is_ = is_[perm]
+    js_ = js_[perm]
 
-    i = len(rs) - 1
+    index_best = len(is_) - 1
 
-    ki = 0
+    curr_nbp = 0
     paths = []
 
-    while (k is None or ki < k) and i >= 0:
+    while (nbp is None or curr_nbp < nbp) and index_best >= 0:
         path = None
 
         while path is None:
 
             # Find the best unmasked
-            while (mask[rs[i], cs[i]]):
-                i -= 1
-                if i < 0:
+            while (mask[is_[index_best], js_[index_best]]):
+                index_best -= 1
+                if index_best < 0:
                     return paths
 
-            r, c = rs[i], cs[i]
-            if r < max_v or c < max_h:
+            i_best, j_best = is_[index_best], js_[index_best]
+            if i_best < max_v or j_best < max_h:
                 return paths
             
-            path = max_warping_path(d, mask, r, c, step_sizes=step_sizes)
+            path = max_warping_path(d, mask, i_best, j_best, step_sizes=step_sizes)
             for (x, y) in path:
                 mask[x + max_h, y + max_v] = True
 
@@ -314,8 +285,8 @@ def _kbest_paths(d, k, mask, l_min=2, buffer=10, step_sizes=np.array([[1, 1], [1
             dy  =  yc - yt
             err = dx + dy
             while xc != xt or yc != yt:
-                mask[xc-buffer:xc+buffer+1, yc] = True
-                mask[xc, yc-buffer:yc+buffer+1] = True
+                mask[xc-vwidth:xc+vwidth+1, yc] = True
+                mask[xc, yc-vwidth:yc+vwidth+1] = True
                 e = 2 * err
                 if e > dy:
                     err += dy
@@ -323,26 +294,26 @@ def _kbest_paths(d, k, mask, l_min=2, buffer=10, step_sizes=np.array([[1, 1], [1
                 if e < dx:
                     err += dx
                     yc  += 1
-        mask[xt-buffer:xt+buffer+1, yt] = True
-        mask[xt, yt-buffer:yt+buffer+1] = True
+        mask[xt-vwidth:xt+vwidth+1, yt] = True
+        mask[xt, yt-vwidth:yt+vwidth+1] = True
         
         # Add path
-        ki += 1
+        curr_nbp += 1
         paths.append(path)
     return paths
 
 # @njit(cache=True)
-def _induced_paths(s, e, series, paths, mask):
+def _induced_paths(b, e, series, paths, mask):
     if mask is None:
         mask = np.full(len(series), False)
 
     induced_paths = []
     for p in paths:
-        if p.cs <= s and e <= p.ce:
-            pi, pj = p.find_col(s), p.find_col(e-1)
-            s_i, e_i = p[pi][0], p[pj][0] + 1
-            if not np.any(mask[s_i:e_i]):
-                induced_path = np.copy(p.path[pi:pj+1])
+        if p.j1 <= b and e <= p.jl:
+            kb, ke = p.find_j(b), p.find_j(e-1)
+            bm, em = p[kb][0], p[ke][0] + 1
+            if not np.any(mask[bm:em]):
+                induced_path = np.copy(p.path[kb:ke+1])
                 induced_paths.append(induced_path)
 
     return induced_paths
@@ -350,40 +321,34 @@ def _induced_paths(s, e, series, paths, mask):
 # @njit(cache=True, parallel=True)
 @njit(cache=True)
 def _calculate_fitnesses(start_mask, end_mask, mask, paths, l_min, l_max, allowed_overlap=0, pruning=True):
-    ss = np.where(start_mask == True)[0]
+    start_indices = np.where(start_mask == True)[0]
     fitnesses = []
 
     n = len(start_mask)
 
-    css = np.array([path.cs for path in paths])
-    ces = np.array([path.ce for path in paths])
+    j1s = np.array([path.j1 for path in paths])
+    jls = np.array([path.jl for path in paths])
 
     nbp = len(paths)
 
-    pis = np.zeros(nbp, dtype=np.int32)
-    pjs = np.zeros(nbp, dtype=np.int32)
-    iss = np.zeros(nbp, dtype=np.int32)
-    ies = np.zeros(nbp, dtype=np.int32)
+    kbs = np.zeros(nbp, dtype=np.int32)
+    kes = np.zeros(nbp, dtype=np.int32)
+    bs = np.zeros(nbp, dtype=np.int32)
+    es = np.zeros(nbp, dtype=np.int32)
 
-    # 1 means relevant
-    pmask = np.full(nbp, False)
+    for b in start_indices:
 
-    for s in ss:
+        smask = j1s <= b
 
-        # if start_mask[s]:
-            # continue
-
-        smask = css <= s
-
-        for e in range(s + l_min, min(n + 1, s + l_max + 1)):
+        for e in range(b + l_min, min(n + 1, b + l_max + 1)):
             
             if not end_mask[e-1]:
                 continue
 
-            if np.any(mask[s:e]):
+            if np.any(mask[b:e]):
                 break
 
-            emask = ces >= e
+            emask = jls >= e
             pmask = smask & emask
 
             # no match
@@ -393,28 +358,28 @@ def _calculate_fitnesses(start_mask, end_mask, mask, paths, l_min, l_max, allowe
             ps  = np.flatnonzero(pmask)
             for p in ps:
                 path = paths[p]
-                pis[p] = pi = path.find_col(s)
-                pjs[p] = pj = path.find_col(e-1)
-                iss[p] = path[pi][0]
-                ies[p] = path[pj][0] + 1
-                if np.any(mask[iss[p]:ies[p]]): # or ies[p] - iss[p] < l_min or ies[p] - iss[p] > l_max:
+                kbs[p] = pi = path.find_j(b)
+                kes[p] = pj = path.find_j(e-1)
+                bs[p] = path[pi][0]
+                es[p] = path[pj][0] + 1
+                if np.any(mask[bs[p]:es[p]]): # or ies[p] - iss[p] < l_min or ies[p] - iss[p] > l_max:
                     pmask[p] = False
 
             if not np.any(pmask[1:]):
                 break
 
             # sort iss and ies
-            iss_ = iss[pmask]
-            ies_ = ies[pmask]
+            bs_ = bs[pmask]
+            es_ = es[pmask]
 
-            perm = np.argsort(iss_)
-            iss_ = iss_[perm]
-            ies_ = ies_[perm]
+            perm = np.argsort(bs_)
+            bs_ = bs_[perm]
+            es_ = es_[perm]
 
             # overlaps   
-            len_     = ies_ - iss_
+            len_     = es_ - bs_
             len_[:-1] = np.minimum(len_[:-1], len_[1:])
-            overlaps  = np.maximum(ies_[:-1] - iss_[1:] - 1, 0)
+            overlaps  = np.maximum(es_[:-1] - bs_[1:] - 1, 0)
             
             if np.any(overlaps > allowed_overlap * len_[:-1]): 
                 if pruning:
@@ -422,14 +387,14 @@ def _calculate_fitnesses(start_mask, end_mask, mask, paths, l_min, l_max, allowe
                 else:
                     continue
 
-            coverage = np.sum(ies_ - iss_) - np.sum(overlaps)
-            n_coverage = (coverage - (e - s)) / float(n)
+            coverage = np.sum(es_ - bs_) - np.sum(overlaps)
+            n_coverage = (coverage - (e - b)) / float(n)
 
             score = 0
             for p in np.flatnonzero(pmask):
-                score += paths[p].cumsim[pjs[p]+1] - paths[p].cumsim[pis[p]]
+                score += paths[p].cumsim[kes[p]+1] - paths[p].cumsim[kbs[p]]
 
-            n_score = (score - (e - s)) / float(np.sum(pjs[pmask] - pis[pmask] + 1))
+            n_score = (score - (e - b)) / float(np.sum(kes[pmask] - kbs[pmask] + 1))
 
             fit = 0
             if n_coverage != 0 or n_score != 0:
@@ -437,16 +402,16 @@ def _calculate_fitnesses(start_mask, end_mask, mask, paths, l_min, l_max, allowe
 
             # Calculate the fitness value
             if fit > 0:
-                fitnesses.append((s, e, fit, n_coverage, n_score))
+                fitnesses.append((b, e, fit, n_coverage, n_score))
 
     return fitnesses
 
 # project paths to the vertical axis
-def row_projections(paths):
+def vertical_projections(paths):
     return [(p[0][0], p[len(p)-1][0]+1) for p in paths]
 
 # project paths to the horizontal axis
-def col_projections(paths):
+def horizontal_projections(paths):
     return [(p[0][1], p[len(p)-1][1]+1) for p in paths]
 
 @njit(cache=True)
@@ -465,13 +430,13 @@ def similarity_matrix_ndim(series1, series2, gamma=1.0, window=None, only_triu=F
 
         j_end   = min(m, i + max(0, m - n) + window)
 
-        affinities = np.exp(-gamma * np.sum(np.power(series1[i, :] - series2[j_start:j_end, :], 2), axis=1))
-        sm[i, j_start:j_end] = affinities
+        similarities = np.exp(-gamma * np.sum(np.power(series1[i, :] - series2[j_start:j_end, :], 2), axis=1))
+        sm[i, j_start:j_end] = similarities
 
     return sm
 
 @njit(cache=True)
-def cumulative_similarity_matrix(sm, tau=0.0, delta=0.0, delta_factor=1.0, step_sizes=np.array([[1, 1], [1, 0], [0, 1]]), window=None, only_triu=False):
+def cumulative_similarity_matrix(sm, tau=0.0, delta_a=0.0, delta_m=1.0, step_sizes=np.array([[1, 1], [2, 1], [1, 2]]), window=None, only_triu=False):
     n, m = sm.shape
 
     if window is None:
@@ -493,57 +458,57 @@ def cumulative_similarity_matrix(sm, tau=0.0, delta=0.0, delta_factor=1.0, step_
             sim     = sm[i, j]
 
             indices    = np.array([i + max_v, j + max_h]) - step_sizes
-            max_cumsim = np.amax(np.array([d[r, c] for (r, c) in indices]))
+            max_cumsim = np.amax(np.array([d[i_, j_] for (i_, j_) in indices]))
 
             if sim < tau:
-                d[i + max_v, j + max_h] = max(0, delta + delta_factor * max_cumsim)
+                d[i + max_v, j + max_h] = max(0, delta_a + delta_m * max_cumsim)
             else:
                 d[i + max_v, j + max_h] = max(0, sim + max_cumsim)
     return d
 
 
 @njit(cache=True)
-def max_warping_path(d, mask, r, c, step_sizes=np.array([[1, 1], [1, 0], [0, 1]])):
+def max_warping_path(d, mask, i, j, step_sizes=np.array([[1, 1], [2, 1], [1, 2]])):
     max_v = max(step_sizes[:, 0])
     max_h = max(step_sizes[:, 1])
 
     path = []
-    while r >= max_v and c >= max_h:
+    while i >= max_v and j >= max_h:
 
-        path.append((r - max_v, c - max_h))
+        path.append((i - max_v, j - max_h))
 
-        indices = np.array([r, c]) - step_sizes
+        indices = np.array([i, j]) - step_sizes
 
-        values = np.array([d[i, j]    for (i, j) in indices])
-        masked = np.array([mask[i, j] for (i, j) in indices])
+        values = np.array([d[i_, j_]    for (i_, j_) in indices])
+        masked = np.array([mask[i_, j_] for (i_, j_) in indices])
         i_max = np.argmax(values)
 
         if masked[i_max]:
             break
 
-        r -= step_sizes[i_max, 0]
-        c -= step_sizes[i_max, 1]
+        i -= step_sizes[i_max, 0]
+        j -= step_sizes[i_max, 1]
 
     path.reverse()
     return np.array(path, dtype=np.int32)
 
 # @njit(cache=True)
-def split_start_mask(n, start_mask, nb_masks):
-    start_mask_matrix = np.full((nb_masks, n), False)
-    nb  = np.sum(start_mask)
+# def split_start_mask(n, start_mask, nb_masks):
+#     start_mask_matrix = np.full((nb_masks, n), False)
+#     nb  = np.sum(start_mask)
 
-    cnt = 0
-    i   = 0
-    s   = 0
+#     cnt = 0
+#     i   = 0
+#     s   = 0
 
-    for e in range(n):
-        cnt += int(start_mask[e])
-        if cnt == np.ceil(nb / nb_masks):
-            start_mask_matrix[i, s:e] = start_mask[s:e] 
-            cnt = 0
-            s = e
-            i += 1
-    if s < n:
-        start_mask_matrix[nb_masks-1, s:] = start_mask[s:] 
-    return [row for row in start_mask_matrix]
+#     for e in range(n):
+#         cnt += int(start_mask[e])
+#         if cnt == np.ceil(nb / nb_masks):
+#             start_mask_matrix[i, s:e] = start_mask[s:e] 
+#             cnt = 0
+#             s = e
+#             i += 1
+#     if s < n:
+#         start_mask_matrix[nb_masks-1, s:] = start_mask[s:] 
+#     return [row for row in start_mask_matrix]
 
