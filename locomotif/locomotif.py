@@ -104,26 +104,6 @@ class LoCoMotif:
         fitnesses = _calculate_fitnesses(start_mask, end_mask, mask, paths=self._paths, l_min=self.l_min, l_max=self.l_max, allowed_overlap=allowed_overlap, pruning=pruning)
         return np.array(fitnesses)
     
-    # def calculate_fitnesses_parallel(self, start_mask, end_mask, mask, allowed_overlap=0, pruning=True, nb_processes=4):
-    #     import multiprocessing as mp
-    #     import functools
-
-    #     n = len(self.series)
-    #     # _calculate_fitnesses(start_mask, end_mask, mask, paths, l_min, l_max, allowed_overlap=0, pruning=True)
-    #     f = functools.partial(_calculate_fitnesses, end_mask=end_mask, mask=mask, paths=self._paths, l_min=self.l_min, l_max=self.l_max, allowed_overlap=allowed_overlap, pruning=pruning)
-
-    #     # decompose the start mask, each mask should have approximately the same number of zeros
-    #     pool    = mp.Pool(nb_processes)
-    #     results = pool.map(f, [row for row in split_start_mask(n, start_mask, nb_processes)])
-    #     pool.close()
-    #     pool.join()
-
-    #     # combine the results
-    #     fitnesses = [fitness for result in results for fitness in result]
-    #     if fitnesses:
-    #         fitnesses = np.vstack(fitnesses)
-    #     return np.array(fitnesses)
-    
 
     # iteratively finds the best motif
     def kbest_motif_sets(self, nb=None, start_mask=None, end_mask=None, mask=None, allowed_overlap=0, pruning=False):
@@ -206,11 +186,8 @@ class Path:
         i_curr = path[0][0]
         j_curr = path[0][1]
 
-        i_last = path[-1][0]
-        j_last = path[-1][1]
-
-        index_i = np.zeros(i_last - self.i1 + 1, dtype=np.int32)
-        index_j = np.zeros(j_last - self.j1 + 1, dtype=np.int32)
+        index_i = np.zeros(self.il - self.i1, dtype=np.int32)
+        index_j = np.zeros(self.jl - self.j1, dtype=np.int32)
 
         for i in range(1, len(path)):
             if path[i][0] != i_curr:
@@ -481,13 +458,13 @@ def max_warping_path(d, mask, i, j, step_sizes=np.array([[1, 1], [2, 1], [1, 2]]
 
         values = np.array([d[i_, j_]    for (i_, j_) in indices])
         masked = np.array([mask[i_, j_] for (i_, j_) in indices])
-        i_max = np.argmax(values)
+        argmax = np.argmax(values)
 
-        if masked[i_max]:
+        if masked[argmax]:
             break
 
-        i -= step_sizes[i_max, 0]
-        j -= step_sizes[i_max, 1]
+        i -= step_sizes[argmax, 0]
+        j -= step_sizes[argmax, 1]
 
     path.reverse()
     return np.array(path, dtype=np.int32)
@@ -512,3 +489,23 @@ def max_warping_path(d, mask, i, j, step_sizes=np.array([[1, 1], [2, 1], [1, 2]]
 #         start_mask_matrix[nb_masks-1, s:] = start_mask[s:] 
 #     return [row for row in start_mask_matrix]
 
+    
+# def calculate_fitnesses_parallel(self, start_mask, end_mask, mask, allowed_overlap=0, pruning=True, nb_processes=4):
+#     import multiprocessing as mp
+#     import functools
+
+#     n = len(self.series)
+#     # _calculate_fitnesses(start_mask, end_mask, mask, paths, l_min, l_max, allowed_overlap=0, pruning=True)
+#     f = functools.partial(_calculate_fitnesses, end_mask=end_mask, mask=mask, paths=self._paths, l_min=self.l_min, l_max=self.l_max, allowed_overlap=allowed_overlap, pruning=pruning)
+
+#     # decompose the start mask, each mask should have approximately the same number of zeros
+#     pool    = mp.Pool(nb_processes)
+#     results = pool.map(f, [row for row in split_start_mask(n, start_mask, nb_processes)])
+#     pool.close()
+#     pool.join()
+
+#     # combine the results
+#     fitnesses = [fitness for result in results for fitness in result]
+#     if fitnesses:
+#         fitnesses = np.vstack(fitnesses)
+#     return np.array(fitnesses)
