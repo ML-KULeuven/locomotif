@@ -22,5 +22,5 @@ classifiers = [
 keywords = ["time series", "motif sets", "variable-length", "time warping", "multivariate"]
 requires-python = ">=3.9"
 dependencies = [
-    'numba >= 0.30.0,
+    'numba >= 0.30.0',
 ]
