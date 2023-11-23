@@ -20,7 +20,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
 ]
 keywords = ["time series", "motif sets", "variable-length", "time warping", "multivariate"]
-requires-python = ">=3.9"
+requires-python = ">=3.8"
 dependencies = [
     'numba >= 0.30.0',
     'matplotlib >=3.0, < 4.0',
