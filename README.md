@@ -1,4 +1,4 @@
-Code accompanying the paper "LoCoMotif: Discovering variable-length motif sets in multivariate time series using time warping" by Daan Van Wesenbeeck, Aras Yurtman, Wannes Meert and Hendrik Blockeel (KULeuven)
+Code accompanying the paper "LoCoMotif: Discovering time-warped motifs in time series" by Daan Van Wesenbeeck, Aras Yurtman, Wannes Meert and Hendrik Blockeel (KULeuven)
 
 # install
 First, clone the repository:
