@@ -25,7 +25,7 @@ def apply_locomotif(series, rho, l_min, l_max, nb_motifs, start_mask=None, end_m
     locomotif = LoCoMotif(series=series, gamma=gamma, tau=tau, delta_a=delta_a, delta_m=delta_m, l_min=l_min, l_max=l_max, step_sizes=step_sizes)
     locomotif._sm = sm
     locomotif.align()
-    locomotif.kbest_paths(vwidth=max(10, l_min // 2))
+    locomotif.kbest_paths(vwidth=l_min // 2)
     motif_sets = []
     for (_, motif_set), _ in locomotif.kbest_motif_sets(nb=nb_motifs, allowed_overlap=overlap, start_mask=start_mask, end_mask=end_mask, pruning=False):
         motif_sets.append(motif_set)
@@ -68,8 +68,9 @@ class LoCoMotif:
 
     def kbest_paths(self, vwidth, nbp=None):
         if vwidth is None:
-            vwidth = self.l_min // 2
-
+            vwidth = max(10, self.l_min // 2)
+        vwidth = max(10, vwidth)
+            
         if self._csm is None:
             self.align()
 
@@ -145,8 +146,10 @@ class LoCoMotif:
             current_nb += 1
             yield (best, motif_set), fitnesses
             
+    def get_paths(self):
+        return [path.path for path in self._paths]
+            
 
-# class ApproximateTWMD:
 def estimate_tau_from_std(series, f, gamma=None):
     diffm = np.std(series, axis=0)
     diffp = f * diffm
@@ -210,6 +213,15 @@ class Path:
     def find_j(self, j):
         assert j - self.j1 >= 0 and j - self.j1 < len(self.index_j)
         return self.index_j[j - self.j1]
+
+    
+# project paths to the vertical axis
+def vertical_projections(paths):
+    return [(p[0][0], p[len(p)-1][0]+1) for p in paths]
+
+# project paths to the horizontal axis
+def horizontal_projections(paths):
+    return [(p[0][1], p[len(p)-1][1]+1) for p in paths]
 
 
 @njit(cache=True)
@@ -383,13 +395,6 @@ def _calculate_fitnesses(start_mask, end_mask, mask, paths, l_min, l_max, allowe
 
     return fitnesses
 
-# project paths to the vertical axis
-def vertical_projections(paths):
-    return [(p[0][0], p[len(p)-1][0]+1) for p in paths]
-
-# project paths to the horizontal axis
-def horizontal_projections(paths):
-    return [(p[0][1], p[len(p)-1][1]+1) for p in paths]
 
 @njit(cache=True)
 def similarity_matrix_ndim(series1, series2, gamma=1.0, window=None, only_triu=False):
