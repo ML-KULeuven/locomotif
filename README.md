@@ -3,7 +3,7 @@ Code accompanying the paper "LoCoMotif: Discovering time-warped motifs in time s
 # install
 First, clone the repository:
 ```
-git clone https://github.com/daanvw/locomotif.git
+git clone https://github.com/ML-KULeuven/locomotif.git
 ```
 Then, navigate into the directory and build the package from source:
 ```
