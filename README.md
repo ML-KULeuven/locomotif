@@ -1,4 +1,4 @@
-Code accompanying the paper "LoCoMotif: Discovering time-warped motifs in time series" by Daan Van Wesenbeeck, Aras Yurtman, Wannes Meert and Hendrik Blockeel (KULeuven)
+Code accompanying the paper ["LoCoMotif: Discovering time-warped motifs in time series" by Daan Van Wesenbeeck, Aras Yurtman, Wannes Meert and Hendrik Blockeel (KULeuven)](https://arxiv.org/abs/2311.17582)
 
 # install
 First, clone the repository:
