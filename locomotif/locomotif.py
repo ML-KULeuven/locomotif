@@ -5,7 +5,7 @@ from numba import njit
 from numba.typed import List
 from numba.experimental import jitclass
 
-def apply_locomotif(series, rho, l_min, l_max, nb_motifs, start_mask=None, end_mask=None, overlap=0.5, warping=True):
+def apply_locomotif(series, rho, l_min, l_max, nb=None, start_mask=None, end_mask=None, overlap=0.5, warping=True):
     """Apply the LoCoMotif algorithm to find motif sets in the given time series.
 
     :param series: Univariate or multivariate time series, with the time axis being the 0-th dimension.
