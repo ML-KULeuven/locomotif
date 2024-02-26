@@ -5,7 +5,7 @@ from numba import njit
 from numba.typed import List
 from numba.experimental import jitclass
 
-def apply_locomotif(series, rho, l_min, l_max, nb_motifs, start_mask=None, end_mask=None, overlap=0.5, warping=True):
+def apply_locomotif(series, rho, l_min, l_max, nb=None, start_mask=None, end_mask=None, overlap=0.5, warping=True):
     if start_mask is None:
         start_mask = np.full(len(series), True)
     if end_mask is None:
@@ -13,7 +13,7 @@ def apply_locomotif(series, rho, l_min, l_max, nb_motifs, start_mask=None, end_m
 
     if series.ndim == 1:
         series = np.expand_dims(series, axis=1)
-
+        
     gamma = 1
     sm  = similarity_matrix_ndim(series, series, gamma, only_triu=True)
     tau = estimate_tau_from_am(sm, rho)
@@ -27,7 +27,7 @@ def apply_locomotif(series, rho, l_min, l_max, nb_motifs, start_mask=None, end_m
     locomotif.align()
     locomotif.kbest_paths(vwidth=l_min // 2)
     motif_sets = []
-    for (_, motif_set), _ in locomotif.kbest_motif_sets(nb=nb_motifs, allowed_overlap=overlap, start_mask=start_mask, end_mask=end_mask, pruning=False):
+    for (_, motif_set), _ in locomotif.kbest_motif_sets(nb=nb, allowed_overlap=overlap, start_mask=start_mask, end_mask=end_mask, pruning=False):
         motif_sets.append(motif_set)
     return motif_sets
 
@@ -137,11 +137,12 @@ class LoCoMotif:
             i_best = np.argmax(fitnesses[:, 2])
             best = fitnesses[i_best]
 
-            (b, e) = int(best[0]), int(best[1])
+            candidate = (b, e) = int(best[0]), int(best[1])
             motif_set = vertical_projections(_induced_paths(b, e, self.series, self._paths, mask))
             for (bm, em) in motif_set:
                 l = em - bm
                 mask[bm + int(allowed_overlap * l) - 1 : em - int(allowed_overlap * l)] = True
+            motif_set.insert(0, motif_set.pop(motif_set.index(candidates)))
 
             current_nb += 1
             yield (best, motif_set), fitnesses
