@@ -5,7 +5,21 @@ from numba import njit
 from numba.typed import List
 from numba.experimental import jitclass
 
-def apply_locomotif(series, rho, l_min, l_max, nb=None, start_mask=None, end_mask=None, overlap=0.5, warping=True):
+def apply_locomotif(series, rho, l_min, l_max, nb_motifs, start_mask=None, end_mask=None, overlap=0.5, warping=True):
+    """Apply the LoCoMotif algorithm to find motif sets in the given time series.
+
+    :param series: Univariate or multivariate time series, with the time axis being the 0-th dimension.
+    :param rho: The strictness parameter between 0 and 1. It is the quantile of the similarity matrix to use as the threshold for the LoCo algorithm.
+    :param l_min: Minimum length of the representative motifs.
+    :param l_max: Maximum length of the representative motifs.
+    :param nb_motifs: Maximum number of motif sets to find.
+    :param start_mask: Mask for the starting time points of representative motifs, where True means allowed. If None, all points are allowed.
+    :param end_mask: Mask for the ending time points of representative motifs, where True means allowed. If None, all points are allowed.
+    :param overlap: Maximum allowed overlap between motifs, between 0 and 0.5. A new motif β can be discovered only when |β ∩ β'|/|β'| is less than this value for all existing motifs β'.
+    :param warping: Whether warping is allowed (True) or not (False).
+    
+    :return: motif_sets: a list of motif sets, where each motif set is a list of segments as tuples.
+    """   
     if start_mask is None:
         start_mask = np.full(len(series), True)
     if end_mask is None:
