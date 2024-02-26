@@ -156,7 +156,7 @@ class LoCoMotif:
             for (bm, em) in motif_set:
                 l = em - bm
                 mask[bm + int(allowed_overlap * l) - 1 : em - int(allowed_overlap * l)] = True
-            motif_set.insert(0, motif_set.pop(motif_set.index(candidates)))
+            motif_set.insert(0, motif_set.pop(motif_set.index(candidate)))
 
             current_nb += 1
             yield (best, motif_set), fitnesses
