@@ -24,7 +24,7 @@ def apply_locomotif(series, rho, l_min, l_max, nb=None, start_mask=None, end_mas
     lcm.align()
     lcm.kbest_paths(vwidth=l_min // 2)
     motif_sets = []
-    for (_, motif_set), _ in lcm.kbest_motif_sets(nb=nb, allowed_overlap=overlap, start_mask=start_mask, end_mask=end_mask, pruning=False):
+    for (_, motif_set), _ in lcm.kbest_motif_sets(nb=nb, allowed_overlap=overlap, start_mask=start_mask, end_mask=end_mask):
         motif_sets.append(motif_set)
     return motif_sets
 
@@ -118,13 +118,13 @@ class LoCoMotif:
     def induced_paths(self, b, e, mask=None):
         return _induced_paths(b, e, self.series, self._paths, mask)
 
-    def calculate_fitnesses(self, start_mask, end_mask, mask, allowed_overlap=0, pruning=True):  
-        fitnesses = _calculate_fitnesses(start_mask, end_mask, mask, paths=self._paths, l_min=self.l_min, l_max=self.l_max, allowed_overlap=allowed_overlap, pruning=pruning)
+    def calculate_fitnesses(self, start_mask, end_mask, mask, allowed_overlap=0):  
+        fitnesses = _calculate_fitnesses(start_mask, end_mask, mask, paths=self._paths, l_min=self.l_min, l_max=self.l_max, allowed_overlap=allowed_overlap)
         return np.array(fitnesses)
     
 
     # iteratively finds the best motif
-    def kbest_motif_sets(self, nb=None, start_mask=None, end_mask=None, mask=None, allowed_overlap=0, pruning=False):
+    def kbest_motif_sets(self, nb=None, start_mask=None, end_mask=None, mask=None, allowed_overlap=0):
         n = len(self.series)
         # handle masks
         if start_mask is None:
@@ -144,8 +144,8 @@ class LoCoMotif:
             start_mask[mask] = False
             end_mask[mask]   = False
         
-            fitnesses = self.calculate_fitnesses(start_mask, end_mask, mask, allowed_overlap=allowed_overlap, pruning=pruning)
-            # fitnesses = self.calculate_fitnesses_parallel(start_mask, end_mask, mask, allowed_overlap=allowed_overlap, pruning=pruning)
+            fitnesses = self.calculate_fitnesses(start_mask, end_mask, mask, allowed_overlap=allowed_overlap)
+            # fitnesses = self.calculate_fitnesses_parallel(start_mask, end_mask, mask, allowed_overlap=allowed_overlap)
 
             if len(fitnesses) == 0:
                 break
@@ -330,7 +330,7 @@ def _induced_paths(b, e, series, paths, mask):
 
 # @njit(cache=True, parallel=True)
 @njit(cache=True)
-def _calculate_fitnesses(start_mask, end_mask, mask, paths, l_min, l_max, allowed_overlap=0, pruning=True):
+def _calculate_fitnesses(start_mask, end_mask, mask, paths, l_min, l_max, allowed_overlap=0):
     start_indices = np.where(start_mask == True)[0]
     fitnesses = []
 
@@ -392,10 +392,7 @@ def _calculate_fitnesses(start_mask, end_mask, mask, paths, l_min, l_max, allowe
             overlaps  = np.maximum(es_[:-1] - bs_[1:] - 1, 0)
             
             if np.any(overlaps > allowed_overlap * len_[:-1]): 
-                if pruning:
-                    break
-                else:
-                    continue
+                continue
 
             coverage = np.sum(es_ - bs_) - np.sum(overlaps)
             n_coverage = (coverage - (e - b)) / float(n)
@@ -516,13 +513,13 @@ def max_warping_path(d, mask, i, j, step_sizes=np.array([[1, 1], [2, 1], [1, 2]]
 #     return [row for row in start_mask_matrix]
 
     
-# def calculate_fitnesses_parallel(self, start_mask, end_mask, mask, allowed_overlap=0, pruning=True, nb_processes=4):
+# def calculate_fitnesses_parallel(self, start_mask, end_mask, mask, allowed_overlap=0, nb_processes=4):
 #     import multiprocessing as mp
 #     import functools
 
 #     n = len(self.series)
-#     # _calculate_fitnesses(start_mask, end_mask, mask, paths, l_min, l_max, allowed_overlap=0, pruning=True)
-#     f = functools.partial(_calculate_fitnesses, end_mask=end_mask, mask=mask, paths=self._paths, l_min=self.l_min, l_max=self.l_max, allowed_overlap=allowed_overlap, pruning=pruning)
+#     # _calculate_fitnesses(start_mask, end_mask, mask, paths, l_min, l_max, allowed_overlap=0)
+#     f = functools.partial(_calculate_fitnesses, end_mask=end_mask, mask=mask, paths=self._paths, l_min=self.l_min, l_max=self.l_max, allowed_overlap=allowed_overlap)
 
 #     # decompose the start mask, each mask should have approximately the same number of zeros
 #     pool    = mp.Pool(nb_processes)
