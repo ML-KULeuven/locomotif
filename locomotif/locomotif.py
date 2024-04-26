@@ -20,6 +20,15 @@ def apply_locomotif(series, rho, l_min, l_max, nb=None, start_mask=None, end_mas
     
     :return: motif_sets: a list of motif sets, where each motif set is a list of segments as tuples.
     """   
+    lcm = get_locomotif_instance(series, rho, l_min, l_max, nb=nb, start_mask=start_mask, end_mask=end_mask, overlap=overlap, warping=warping)
+    lcm.align()
+    lcm.kbest_paths(vwidth=l_min // 2)
+    motif_sets = []
+    for (_, motif_set), _ in lcm.kbest_motif_sets(nb=nb, allowed_overlap=overlap, start_mask=start_mask, end_mask=end_mask, pruning=False):
+        motif_sets.append(motif_set)
+    return motif_sets
+
+def get_locomotif_instance(series, rho, l_min, l_max, nb=None, start_mask=None, end_mask=None, overlap=0.5, warping=True):
     if start_mask is None:
         start_mask = np.full(len(series), True)
     if end_mask is None:
@@ -36,15 +45,9 @@ def apply_locomotif(series, rho, l_min, l_max, nb=None, start_mask=None, end_mas
     delta_m = 0.5
     step_sizes = np.array([(1, 1), (2, 1), (1, 2)]) if warping else np.array([(1, 1)])
 
-    locomotif = LoCoMotif(series=series, gamma=gamma, tau=tau, delta_a=delta_a, delta_m=delta_m, l_min=l_min, l_max=l_max, step_sizes=step_sizes)
-    locomotif._sm = sm
-    locomotif.align()
-    locomotif.kbest_paths(vwidth=l_min // 2)
-    motif_sets = []
-    for (_, motif_set), _ in locomotif.kbest_motif_sets(nb=nb, allowed_overlap=overlap, start_mask=start_mask, end_mask=end_mask, pruning=False):
-        motif_sets.append(motif_set)
-    return motif_sets
-
+    lcm = LoCoMotif(series=series, gamma=gamma, tau=tau, delta_a=delta_a, delta_m=delta_m, l_min=l_min, l_max=l_max, step_sizes=step_sizes)
+    lcm._sm = sm
+    return lcm
 
 class LoCoMotif:
 
@@ -163,6 +166,9 @@ class LoCoMotif:
             
     def get_paths(self):
         return [path.path for path in self._paths]
+    
+    def get_ssm(self):
+        return self._sm
             
 
 def estimate_tau_from_std(series, f, gamma=None):
