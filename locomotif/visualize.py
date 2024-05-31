@@ -8,7 +8,7 @@ MEDIUM_SIZE = 12
 BIG_SIZE = 14
 
 
-def plot_motif_sets(series, motif_sets, gt=None, dimension_names=None):
+def plot_motif_sets(series, motif_sets, gt=None, dimension_names=None, legend=True):
     if series.ndim == 1:
         series = np.expand_dims(series, axis=1)
     if dimension_names is None:
@@ -20,11 +20,11 @@ def plot_motif_sets(series, motif_sets, gt=None, dimension_names=None):
     if np.array(axs).ndim == 0:
         axs = [axs]
 
-    # axs[0].set_prop_cycle(cycler(color=[u'#00407a', u'#2ca02c', u'#c00000']))
-    axs[0].set_prop_cycle(cycler(color=["tab:blue", "tab:green", "tab:red"]))
+    # axs[0].set_prop_cycle(cycler(color=["tab:blue", "tab:green", "tab:red"]))
 
     axs[0].plot(range(len(series)), series, lw=1.5)
-    axs[0].legend(dimension_names, fontsize=SMALL_SIZE)
+    if legend:
+        axs[0].legend(dimension_names, fontsize=SMALL_SIZE)
     axs[0].set_xlim((0, n))
 
     if gt is not None:
@@ -33,9 +33,10 @@ def plot_motif_sets(series, motif_sets, gt=None, dimension_names=None):
     for i, motif_set in enumerate(motif_sets):
         axs[i+1].set_title(f"Motif Set {i+1}, k: {len(motif_set)}", fontsize=BIG_SIZE)
         for s_m, e_m in motif_set:
-            # axs[i+1].set_prop_cycle(cycler(color=[u'#00407a', u'#2ca02c', u'#c00000']))
-            axs[i+1].set_prop_cycle(cycler(color=["tab:blue", "tab:green", "tab:red"]))
+            # axs[i+1].set_prop_cycle(cycler(color=["tab:blue", "tab:green", "tab:red"]))
+            axs[i+1].set_prop_cycle(None)
 
+            
             axs[i+1].plot(range(s_m, e_m), series[s_m : e_m, :], alpha=1, lw=1.5)
             axs[i+1].axvline(x=s_m, c='k', linestyle=':', lw=0.25)
             axs[i+1].axvline(x=e_m, c='k', linestyle=':', lw=0.25)
