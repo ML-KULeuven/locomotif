@@ -7,14 +7,14 @@ from numba.typed import List
 from numba.experimental import jitclass
 
 
-def apply_locomotif(series, rho, l_min, l_max, nb=None, start_mask=None, end_mask=None, overlap=0.5, warping=True):
-    """Apply the LoCoMotif algorithm to find motif sets in the given time series.
+def apply_locomotif(ts, l_min, l_max, rho=None, nb=None, start_mask=None, end_mask=None, overlap=0.5, warping=True):
+    """Apply the LoCoMotif algorithm to find motif sets in the given time ts.
 
-    :param series: Univariate or multivariate time series, with the time axis being the 0-th dimension.
-    :param rho: The strictness parameter between 0 and 1. It is the quantile of the similarity matrix to use as the threshold for the LoCo algorithm.
+    :param ts: Univariate or multivariate time series, with the time axis being the 0-th dimension.
     :param l_min: Minimum length of the representative motifs.
     :param l_max: Maximum length of the representative motifs.
-    :param nb_motifs: Maximum number of motif sets to find.
+    :param rho: The strictness parameter between 0 and 1. It is the quantile of the similarity matrix to use as the threshold for the LoCo algorithm.
+    :param nb: Maximum number of motif sets to find.
     :param start_mask: Mask for the starting time points of representative motifs, where True means allowed. If None, all points are allowed.
     :param end_mask: Mask for the ending time points of representative motifs, where True means allowed. If None, all points are allowed.
     :param overlap: Maximum allowed overlap between motifs, between 0 and 0.5. A new motif β can be discovered only when |β ∩ β'|/|β'| is less than this value for all existing motifs β'.
@@ -22,53 +22,62 @@ def apply_locomotif(series, rho, l_min, l_max, nb=None, start_mask=None, end_mas
     
     :return: motif_sets: a list of motif sets, where each motif set is a list of segments as tuples.
     """   
-    lcm = get_locomotif_instance(series, rho, l_min, l_max, nb=nb, start_mask=start_mask, end_mask=end_mask, overlap=overlap, warping=warping)
+    assert 0.0 <= overlap and overlap <= 0.5
+    # Get a locomotif instance
+    lcm = get_locomotif_instance(ts, l_min, l_max, rho=rho, start_mask=start_mask, end_mask=end_mask, warping=warping)
+    # Apply LoCo
     lcm.align()
     lcm.kbest_paths(vwidth=l_min // 2)
+    # find the nb best motif sets
     motif_sets = []
     for (_, motif_set), _ in lcm.kbest_motif_sets(nb=nb, allowed_overlap=overlap, start_mask=start_mask, end_mask=end_mask):
         motif_sets.append(motif_set)
     return motif_sets
 
-def get_locomotif_instance(series, rho, l_min, l_max, nb=None, start_mask=None, end_mask=None, overlap=0.5, warping=True):
+def get_locomotif_instance(ts, l_min, l_max, rho=None, start_mask=None, end_mask=None, warping=True):
     if start_mask is None:
-        start_mask = np.full(len(series), True)
+        start_mask = np.full(len(ts), True)
     if end_mask is None:
-        end_mask   = np.full(len(series), True)
-
-    if series.ndim == 1:
-        series = np.expand_dims(series, axis=1)
+        end_mask   = np.full(len(ts), True)
+    # Handle default rho value
+    if rho is None:
+        rho = 0.8 if warping else 0.5
+    # Make ts of shape (n,) of shape (n, 1) such that it can be handled as a multivariate ts
+    if ts.ndim == 1:
+        ts = np.expand_dims(ts, axis=1)
+    ts = np.array(ts, dtype=np.float32)
+    # Checks
+    n = len(ts)
+    assert start_mask.shape == (n,)
+    assert end_mask.shape   == (n,)
+    # TODO: Check whether the time series is z-normalized. If not, give a warning.
+    # "It is highly recommended to z-normalize the time series before applying LoCoMotif to it."
     
-    # TODO
-    n = len(series)
-    assert len(start_mask) == n
-    assert len(end_mask)   == n
-
     gamma = 1
-    series = np.array(series, dtype=np.float32)
-    sm  = similarity_matrix_ndim(series, series, gamma, only_triu=True)
+    # Determine values for tau, delta_a, delta_m based on the ssm and rho
+    sm  = similarity_matrix_ndim(ts, ts, gamma, only_triu=True)
     tau = estimate_tau_from_am(sm, rho)
 
     delta_a = -2*tau
     delta_m = 0.5
+    # Determine step_sizes based on warping
     step_sizes = np.array([(1, 1), (2, 1), (1, 2)]) if warping else np.array([(1, 1)])
-
-    lcm = LoCoMotif(series=series, gamma=gamma, tau=tau, delta_a=delta_a, delta_m=delta_m, l_min=l_min, l_max=l_max, step_sizes=step_sizes)
+    lcm = LoCoMotif(ts=ts, gamma=gamma, tau=tau, delta_a=delta_a, delta_m=delta_m, l_min=l_min, l_max=l_max, step_sizes=step_sizes)
     lcm._sm = sm
     return lcm
 
 class LoCoMotif:
 
-    def __init__(self, series, gamma=1.0, tau=0.5, delta_a=0.5, delta_m=0.5, l_min=5, l_max=None, step_sizes=None):
+    def __init__(self, ts, gamma=1.0, tau=0.5, delta_a=0.5, delta_m=0.5, l_min=5, l_max=None, step_sizes=None):
         if step_sizes is None:
             step_sizes = np.array([(1, 1), (2, 1), (1, 2)])
         if l_max is None:
-            l_max = len(series)
+            l_max = len(ts)
 
-        if series.ndim == 1:
-            series = np.expand_dims(series, axis=1)
+        if ts.ndim == 1:
+            ts = np.expand_dims(ts, axis=1)
             
-        self.series = np.array(series, dtype=np.float32)
+        self.ts = np.array(ts, dtype=np.float32)
 
         self.l_min = np.int32(l_min)
         self.l_max = np.int32(l_max)
@@ -87,7 +96,7 @@ class LoCoMotif:
 
     def align(self):
         if self._sm is None:
-            self._sm  = similarity_matrix_ndim(self.series, self.series, gamma=self.gamma, only_triu=True)
+            self._sm  = similarity_matrix_ndim(self.ts, self.ts, gamma=self.gamma, only_triu=True)
         if self._csm is None:
             self._csm = cumulative_similarity_matrix(self._sm, tau=self.tau, delta_a=self.delta_a, delta_m=self.delta_m, step_sizes=self.step_sizes, only_triu=True)
 
@@ -106,7 +115,7 @@ class LoCoMotif:
         paths = _kbest_paths(self._csm, mask, l_min=self.l_min, vwidth=vwidth, step_sizes=self.step_sizes)
 
         # Hardcode diagonal as a path (only needed if step_sizes = [(1, 1), (0, 1), (1, 0)])
-        diagonal = np.vstack(np.diag_indices(len(self.series))).astype(np.int32).T
+        diagonal = np.vstack(np.diag_indices(len(self.ts))).astype(np.int32).T
         self._paths = List()
         # self._paths = []
         self._paths.append(Path(diagonal, np.ones(len(diagonal)).astype(np.float32)))
@@ -125,7 +134,7 @@ class LoCoMotif:
 
     def induced_paths(self, b, e, mask=None):
         if mask is None:
-            mask = np.full(len(series), False)
+            mask = np.full(len(ts), False)
 
         induced_paths = []
         for p in self._paths:
@@ -144,7 +153,7 @@ class LoCoMotif:
 
     # iteratively finds the best motif set
     def kbest_motif_sets(self, nb=None, start_mask=None, end_mask=None, mask=None, allowed_overlap=0.0):
-        n = len(self.series)
+        n = len(self.ts)
         # handle masks
         if start_mask is None:
             start_mask = np.full(n, True)
@@ -240,8 +249,8 @@ class Path:
         return self.index_j[j - self.j1]
 
     
-def estimate_tau_from_std(series, f, gamma=None):
-    diffm = np.std(series, axis=0)
+def estimate_tau_from_std(ts, f, gamma=None):
+    diffm = np.std(ts, axis=0)
     diffp = f * diffm
     if gamma is None:
         gamma = 1 / np.dot(diffp, diffp)
@@ -253,11 +262,11 @@ def estimate_tau_from_am(am, rho):
     tau = np.quantile(am[np.triu_indices(len(am))], rho, axis=None)
     return tau
         
-# project paths to the vertical axis
+# Project paths to the vertical axis
 def vertical_projections(paths):
     return [(p[0][0], p[len(p)-1][0]+1) for p in paths]
 
-# project paths to the horizontal axis
+# Project paths to the horizontal axis
 def horizontal_projections(paths):
     return [(p[0][1], p[len(p)-1][1]+1) for p in paths]
 
