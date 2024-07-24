@@ -28,10 +28,10 @@ def apply_locomotif(ts, l_min, l_max, rho=None, nb=None, start_mask=None, end_ma
     # Apply LoCo
     lcm.align()
     lcm.kbest_paths(vwidth=l_min // 2)
-    # find the nb best motif sets
+    # Find the `nb` best motif sets
     motif_sets = []
-    for (_, motif_set), _ in lcm.kbest_motif_sets(nb=nb, allowed_overlap=overlap, start_mask=start_mask, end_mask=end_mask):
-        motif_sets.append(motif_set)
+    for representative, motif_set, _ in lcm.kbest_motif_sets(nb=nb, overlap=overlap, start_mask=start_mask, end_mask=end_mask):
+        motif_sets.append((representative, motif_set))
     return motif_sets
 
 def get_locomotif_instance(ts, l_min, l_max, rho=None, start_mask=None, end_mask=None, warping=True):
@@ -52,46 +52,43 @@ def get_locomotif_instance(ts, l_min, l_max, rho=None, start_mask=None, end_mask
     assert end_mask.shape   == (n,)
     # TODO: Check whether the time series is z-normalized. If not, give a warning.
     # "It is highly recommended to z-normalize the time series before applying LoCoMotif to it."
-    
+
     gamma = 1
     # Determine values for tau, delta_a, delta_m based on the ssm and rho
     sm  = similarity_matrix_ndim(ts, ts, gamma, only_triu=True)
     tau = estimate_tau_from_am(sm, rho)
 
-    delta_a = -2*tau
+    delta_a = 2*tau
     delta_m = 0.5
     # Determine step_sizes based on warping
     step_sizes = np.array([(1, 1), (2, 1), (1, 2)]) if warping else np.array([(1, 1)])
-    lcm = LoCoMotif(ts=ts, gamma=gamma, tau=tau, delta_a=delta_a, delta_m=delta_m, l_min=l_min, l_max=l_max, step_sizes=step_sizes)
+    lcm = LoCoMotif(ts=ts, l_min=l_min, l_max=l_max, gamma=gamma, tau=tau, delta_a=delta_a, delta_m=delta_m, step_sizes=step_sizes)
     lcm._sm = sm
     return lcm
 
 class LoCoMotif:
 
-    def __init__(self, ts, gamma=1.0, tau=0.5, delta_a=0.5, delta_m=0.5, l_min=5, l_max=None, step_sizes=None):
+    def __init__(self, ts, l_min, l_max, gamma=1.0, tau=0.5, delta_a=1.0, delta_m=0.5, step_sizes=None):
         if step_sizes is None:
             step_sizes = np.array([(1, 1), (2, 1), (1, 2)])
-        if l_max is None:
-            l_max = len(ts)
 
         if ts.ndim == 1:
             ts = np.expand_dims(ts, axis=1)
-            
         self.ts = np.array(ts, dtype=np.float32)
 
         self.l_min = np.int32(l_min)
         self.l_max = np.int32(l_max)
         self.step_sizes = step_sizes.astype(np.int32)
-        # LC args
+        # LoCo arguments
         self.gamma = gamma
         self.tau = tau
         self.delta_a = delta_a
         self.delta_m = delta_m
+        # Self-similarity matrix
+        self._sm = None
         # Cumulative similiarity matrix
         self._csm = None
-        # Self similarity matrix
-        self._sm = None
-        # Local Warping paths
+        # Local warping paths
         self._paths = None
 
     def align(self):
@@ -108,13 +105,13 @@ class LoCoMotif:
         if self._csm is None:
             self.align()
 
-        # Mask region around the diagional as if the diagonal is already found as a path
+        # Hardcode diagonal (this is only needed if step_sizes=[(1, 1), (0, 1), (1, 0)]).
+        #   - First, mask region around the diagional as if the diagonal is already found as a path.
+        #   - After applying LoCo, add the diagonal to the result.
         mask = np.full(self._csm.shape, True)
         mask[np.triu_indices(len(mask), k=vwidth)] = False
-
+        # LoCo is only applied to the part of the SSM above the diagonal. Later, the mirrored versions of the found paths are added.
         paths = _kbest_paths(self._csm, mask, l_min=self.l_min, vwidth=vwidth, step_sizes=self.step_sizes)
-
-        # Hardcode diagonal as a path (only needed if step_sizes = [(1, 1), (0, 1), (1, 0)])
         diagonal = np.vstack(np.diag_indices(len(self.ts))).astype(np.int32).T
         self._paths = List()
         # self._paths = []
@@ -124,7 +121,7 @@ class LoCoMotif:
             i, j = path[:, 0], path[:, 1]
             path_similarities = self._sm[i, j]
             self._paths.append(Path(path, path_similarities))
-            # Add mirrored path
+            # Also add the mirrored path
             path_mirrored = np.zeros(path.shape, dtype=np.int32)
             path_mirrored[:, 0] = np.copy(path[:, 1])
             path_mirrored[:, 1] = np.copy(path[:, 0])
@@ -134,7 +131,7 @@ class LoCoMotif:
 
     def induced_paths(self, b, e, mask=None):
         if mask is None:
-            mask = np.full(len(ts), False)
+            mask = np.full(len(self.ts), False)
 
         induced_paths = []
         for p in self._paths:
@@ -147,12 +144,8 @@ class LoCoMotif:
 
         return induced_paths
 
-    def calculate_fitnesses(self, start_mask, end_mask, mask, allowed_overlap=0):  
-        fitnesses = _calculate_fitnesses(start_mask, end_mask, mask, paths=self._paths, l_min=self.l_min, l_max=self.l_max, allowed_overlap=allowed_overlap)
-        return fitnesses
-
     # iteratively finds the best motif set
-    def kbest_motif_sets(self, nb=None, start_mask=None, end_mask=None, mask=None, allowed_overlap=0.0):
+    def kbest_motif_sets(self, nb=None, start_mask=None, end_mask=None, mask=None, overlap=0.0):
         n = len(self.ts)
         # handle masks
         if start_mask is None:
@@ -172,25 +165,19 @@ class LoCoMotif:
             start_mask[mask] = False
             end_mask[mask]   = False
         
-            fitnesses = self.calculate_fitnesses(start_mask, end_mask, mask, allowed_overlap=allowed_overlap)
+            (b, e), best_fitness, fitnesses  = _find_best_candidate(start_mask, end_mask, mask, paths=self._paths, l_min=self.l_min, l_max=self.l_max, overlap=overlap, keep_fitnesses=False)
             # fitnesses = self.calculate_fitnesses_parallel(start_mask, end_mask, mask, allowed_overlap=allowed_overlap)
 
-            if len(fitnesses) == 0:
+            if best_fitness == 0.0:
                 break
 
-            # best candidate
-            i_best = np.argmax(fitnesses[:, 2])
-            best = fitnesses[i_best]
-
-            candidate = (b, e) = int(best[0]), int(best[1])
             motif_set = vertical_projections(self.induced_paths(b, e, mask))
             for (bm, em) in motif_set:
                 l = em - bm
-                mask[bm + int(allowed_overlap * l) - 1 : em - int(allowed_overlap * l)] = True
-            motif_set.insert(0, motif_set.pop(motif_set.index(candidate)))
+                mask[bm + int(overlap * l) - 1 : em - int(overlap * l)] = True
 
             current_nb += 1
-            yield (best, motif_set), fitnesses
+            yield (b, e), motif_set, fitnesses
             
     def get_paths(self):
         return [path.path for path in self._paths]
@@ -287,7 +274,7 @@ def similarity_matrix_ndim(series1, series2, gamma=1.0, only_triu=False):
     return sm
 
 @njit(float32[:, :](float32[:, :], float64, float64, float64, int32[:, :], boolean))
-def cumulative_similarity_matrix(sm, tau=0.0, delta_a=0.0, delta_m=1.0, step_sizes=np.array([[1, 1], [2, 1], [1, 2]]), only_triu=False):
+def cumulative_similarity_matrix(sm, tau=0.5, delta_a=1.0, delta_m=0.5, step_sizes=np.array([[1, 1], [2, 1], [1, 2]]), only_triu=False):
     n, m = sm.shape
     max_v = np.amax(step_sizes[:, 0])
     max_h = np.amax(step_sizes[:, 1])
@@ -306,7 +293,7 @@ def cumulative_similarity_matrix(sm, tau=0.0, delta_a=0.0, delta_m=1.0, step_siz
             max_cumsim = np.amax(np.array([d[i_, j_] for (i_, j_) in indices]))
 
             if sim < tau:
-                d[i + max_v, j + max_h] = max(0, delta_a + delta_m * max_cumsim)
+                d[i + max_v, j + max_h] = max(0, delta_m * max_cumsim - delta_a)
             else:
                 d[i + max_v, j + max_h] = max(0, sim + max_cumsim)
     return d
@@ -417,8 +404,8 @@ def _kbest_paths(d, mask, l_min=2, vwidth=10, step_sizes=np.array([[1, 1], [2, 1
     return paths
 
 
-@njit(float32[:, :](boolean[:], boolean[:], boolean[:], numba.types.ListType(Path.class_type.instance_type), int32, int32, float64))
-def _calculate_fitnesses(start_mask, end_mask, mask, paths, l_min, l_max, allowed_overlap=0.0):
+@njit(numba.types.Tuple((numba.types.UniTuple(int32, 2), float32, float32[:, :]))(boolean[:], boolean[:], boolean[:], numba.types.ListType(Path.class_type.instance_type), int32, int32, float64, boolean))
+def _find_best_candidate(start_mask, end_mask, mask, paths, l_min, l_max, overlap=0.0, keep_fitnesses=False):
     fitnesses = []    
     n = len(start_mask)
 
@@ -431,6 +418,9 @@ def _calculate_fitnesses(start_mask, end_mask, mask, paths, l_min, l_max, allowe
     kes = np.zeros(nbp, dtype=np.int32)
     bs  = np.zeros(nbp, dtype=np.int32)
     es  = np.zeros(nbp, dtype=np.int32)
+
+    best_fitness   = 0.0
+    best_candidate = (0, n) 
 
     for b in range(n - l_min + 1):
         
@@ -480,29 +470,37 @@ def _calculate_fitnesses(start_mask, end_mask, mask, paths, l_min, l_max, allowe
             overlaps  = np.maximum(es_[:-1] - bs_[1:] - 1, 0)
             
             # Overlap check within motif set
-            if np.any(overlaps > allowed_overlap * len_[:-1]): 
+            if np.any(overlaps > overlap * len_[:-1]): 
                 continue
 
-            # Calculate the fitness value
+            # Calculate normalized coverage
             coverage = np.sum(es_ - bs_) - np.sum(overlaps)
             n_coverage = (coverage - (e - b)) / float(n)
 
+            # Calculate normalized score
             score = 0
             for p in np.flatnonzero(pmask):
                 score += paths[p].cumsim[kes[p]+1] - paths[p].cumsim[kbs[p]]
-
             n_score = (score - (e - b)) / float(np.sum(kes[pmask] - kbs[pmask] + 1))
             
-            fit = 0
+            # Calculate the fitness value
+            fit = 0.0
             if n_coverage != 0 or n_score != 0:
                 fit = 2 * (n_coverage * n_score) / (n_coverage + n_score)
-
-            if fit > 0:
-                fitnesses.append((b, e, fit, n_coverage, n_score))    
     
-    if fitnesses:
-        return np.array(fitnesses, dtype=np.float32)
-    else:
-        return np.empty((0, 5), dtype=np.float32)
+            if fit == 0.0:
+                continue
+
+            # Update best fitness
+            if fit > best_fitness:
+                best_candidate = (b, e)
+                best_fitness   = fit
+
+            # Store fitness if necessary
+            if keep_fitnesses:
+                fitnesses.append([b, e, fit, n_coverage, n_score])
+    
+    fitnesses = np.array(fitnesses, dtype=np.float32) if fitnesses else np.empty((0, 5), dtype=np.float32)
+    return best_candidate, best_fitness, fitnesses
 
 
