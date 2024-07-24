@@ -31,6 +31,8 @@ def plot_motif_sets(series, motif_sets, gt=None, dimension_names=None, legend=Tr
         plot_ground_truth_ax(axs[0], gt, n)
 
     for i, motif_set in enumerate(motif_sets):
+        if type(motif_set) is tuple:
+            _, motif_set = motif_set
         axs[i+1].set_title(f"Motif Set {i+1}, k: {len(motif_set)}", fontsize=BIG_SIZE)
         for s_m, e_m in motif_set:
             # axs[i+1].set_prop_cycle(cycler(color=["tab:blue", "tab:green", "tab:red"]))
