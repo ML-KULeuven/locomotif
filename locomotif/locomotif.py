@@ -1,4 +1,5 @@
 import numpy as np
+from . import util
 
 import numba
 from numba import int32, float64, float32, boolean
@@ -22,23 +23,18 @@ def apply_locomotif(ts, l_min, l_max, rho=None, nb=None, start_mask=None, end_ma
     
     :return: motif_sets: a list of motif sets, where each motif set is a list of segments as tuples.
     """   
-    assert 0.0 <= overlap and overlap <= 0.5
     # Get a locomotif instance
-    lcm = get_locomotif_instance(ts, l_min, l_max, rho=rho, start_mask=start_mask, end_mask=end_mask, warping=warping)
+    lcm = get_locomotif_instance(ts, l_min, l_max, rho=rho, warping=warping)
     # Apply LoCo
     lcm.align()
-    lcm.kbest_paths(vwidth=l_min // 2)
+    lcm.find_best_paths(vwidth=l_min // 2)
     # Find the `nb` best motif sets
     motif_sets = []
-    for representative, motif_set, _ in lcm.kbest_motif_sets(nb=nb, overlap=overlap, start_mask=start_mask, end_mask=end_mask):
+    for representative, motif_set, _ in lcm.find_best_motif_sets(nb=nb, overlap=overlap, start_mask=start_mask, end_mask=end_mask):
         motif_sets.append((representative, motif_set))
     return motif_sets
 
-def get_locomotif_instance(ts, l_min, l_max, rho=None, start_mask=None, end_mask=None, warping=True):
-    if start_mask is None:
-        start_mask = np.full(len(ts), True)
-    if end_mask is None:
-        end_mask   = np.full(len(ts), True)
+def get_locomotif_instance(ts, l_min, l_max, rho=None, warping=True):
     # Handle default rho value
     if rho is None:
         rho = 0.8 if warping else 0.5
@@ -48,10 +44,10 @@ def get_locomotif_instance(ts, l_min, l_max, rho=None, start_mask=None, end_mask
     ts = np.array(ts, dtype=np.float32)
     # Checks
     n = len(ts)
-    assert start_mask.shape == (n,)
-    assert end_mask.shape   == (n,)
-    # TODO: Check whether the time series is z-normalized. If not, give a warning.
-    # "It is highly recommended to z-normalize the time series before applying LoCoMotif to it."
+    # Check whether the time series is z-normalized. If not, give a warning.
+    if not util.is_znormalized(ts):
+        import warnings
+        warnings.warn("It is highly recommended to z-normalize the input time series before applying LoCoMotif to it.")
 
     gamma = 1
     # Determine values for tau, delta_a, delta_m based on the ssm and rho
@@ -97,7 +93,7 @@ class LoCoMotif:
         if self._csm is None:
             self._csm = cumulative_similarity_matrix(self._sm, tau=self.tau, delta_a=self.delta_a, delta_m=self.delta_m, step_sizes=self.step_sizes, only_triu=True)
 
-    def kbest_paths(self, vwidth):
+    def find_best_paths(self, vwidth):
         if vwidth is None:
             vwidth = max(10, self.l_min // 2)
         vwidth = max(10, vwidth)
@@ -111,7 +107,7 @@ class LoCoMotif:
         mask = np.full(self._csm.shape, True)
         mask[np.triu_indices(len(mask), k=vwidth)] = False
         # LoCo is only applied to the part of the SSM above the diagonal. Later, the mirrored versions of the found paths are added.
-        paths = _kbest_paths(self._csm, mask, l_min=self.l_min, vwidth=vwidth, step_sizes=self.step_sizes)
+        paths = _find_best_paths(self._csm, mask, l_min=self.l_min, vwidth=vwidth, step_sizes=self.step_sizes)
         diagonal = np.vstack(np.diag_indices(len(self.ts))).astype(np.int32).T
         self._paths = List()
         # self._paths = []
@@ -145,18 +141,21 @@ class LoCoMotif:
         return induced_paths
 
     # iteratively finds the best motif set
-    def kbest_motif_sets(self, nb=None, start_mask=None, end_mask=None, mask=None, overlap=0.0):
+    def find_best_motif_sets(self, nb=None, start_mask=None, end_mask=None, overlap=0.0):
         n = len(self.ts)
         # handle masks
         if start_mask is None:
             start_mask = np.full(n, True)
         if end_mask is None:
             end_mask   = np.full(n, True)
-        if mask is None:
-            mask       = np.full(n, False)
+    
+        assert 0.0 <= overlap and overlap <= 0.5
+        assert start_mask.shape == (n,)
+        assert end_mask.shape   == (n,)
 
         # iteratively find best motif sets
         current_nb = 0
+        mask       = np.full(n, False)
         while (nb is None or current_nb < nb):
 
             if np.all(mask) or not np.any(start_mask) or not np.any(end_mask):
@@ -350,7 +349,7 @@ def mask_vicinity(path, mask, max_v, max_h, vwidth=10):
     return mask
 
 @njit(numba.types.List(int32[:, :])(float32[:, :], boolean[:, :], int32, int32, int32[:, :]))
-def _kbest_paths(d, mask, l_min=2, vwidth=10, step_sizes=np.array([[1, 1], [2, 1], [1, 2]], dtype=np.int32)):
+def _find_best_paths(d, mask, l_min=2, vwidth=10, step_sizes=np.array([[1, 1], [2, 1], [1, 2]], dtype=np.int32)):
     max_v = max(step_sizes[:, 0])
     max_h = max(step_sizes[:, 1])
 
@@ -498,7 +497,7 @@ def _find_best_candidate(start_mask, end_mask, mask, paths, l_min, l_max, overla
 
             # Store fitness if necessary
             if keep_fitnesses:
-                fitnesses.append([b, e, fit, n_coverage, n_score])
+                fitnesses.append((b, e, fit, n_coverage, n_score))
     
     fitnesses = np.array(fitnesses, dtype=np.float32) if fitnesses else np.empty((0, 5), dtype=np.float32)
     return best_candidate, best_fitness, fitnesses
