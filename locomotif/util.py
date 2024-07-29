@@ -1,5 +1,6 @@
 import numpy as np
 
+
 def is_znormalized(ts, tolerance=0.01):
     assert ts.ndim == 1 or ts.ndim == 2
     mean = np.mean(ts, axis=None)

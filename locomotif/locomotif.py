@@ -8,7 +8,7 @@ from numba.typed import List
 from numba.experimental import jitclass
 
 
-def apply_locomotif(ts, l_min, l_max, rho=None, nb=None, start_mask=None, end_mask=None, overlap=0.5, warping=True):
+def apply_locomotif(ts, l_min, l_max, rho=None, nb=None, start_mask=None, end_mask=None, overlap=0.0, warping=True):
     """Apply the LoCoMotif algorithm to find motif sets in the given time ts.
 
     :param ts: Univariate or multivariate time series, with the time axis being the 0-th dimension.
@@ -33,6 +33,8 @@ def apply_locomotif(ts, l_min, l_max, rho=None, nb=None, start_mask=None, end_ma
     for representative, motif_set, _ in lcm.find_best_motif_sets(nb=nb, overlap=overlap, start_mask=start_mask, end_mask=end_mask):
         motif_sets.append((representative, motif_set))
     return motif_sets
+
+
 
 def get_locomotif_instance(ts, l_min, l_max, rho=None, warping=True):
     # Handle default rho value
@@ -93,6 +95,7 @@ class LoCoMotif:
         if self._csm is None:
             self._csm = cumulative_similarity_matrix(self._sm, tau=self.tau, delta_a=self.delta_a, delta_m=self.delta_m, step_sizes=self.step_sizes, only_triu=True)
 
+    
     def find_best_paths(self, vwidth):
         if vwidth is None:
             vwidth = max(10, self.l_min // 2)
@@ -373,7 +376,8 @@ def _find_best_paths(d, mask, l_min=2, vwidth=10, step_sizes=np.array([[1, 1], [
         path = np.empty((0, 0), dtype=np.int32)
 
         # Keep iterating until valid path is constructed
-        while path.size == 0:
+        path_found = False
+        while not path_found:
 
             # Find the best unmasked index in D
             while (mask[is_[index_best], js_[index_best]]):
@@ -382,6 +386,7 @@ def _find_best_paths(d, mask, l_min=2, vwidth=10, step_sizes=np.array([[1, 1], [
                     return paths
 
             i_best, j_best = is_[index_best], js_[index_best]
+
             if i_best < max_v or j_best < max_h:
                 return paths
             
@@ -391,8 +396,8 @@ def _find_best_paths(d, mask, l_min=2, vwidth=10, step_sizes=np.array([[1, 1], [
             mask = mask_path(path, mask, max_v, max_h)
 
             # Discard if any projection of path is shorter than the minimum motif length  
-            if (path[-1][0] - path[0][0] + 1) < l_min and (path[-1][1] - path[0][1] + 1) < l_min:
-                path = np.empty((0, 0), dtype=np.int32)
+            if (path[-1][0] - path[0][0] + 1) >= l_min or (path[-1][1] - path[0][1] + 1) >= l_min:
+                path_found = True
 
         # Path goes through: use Bresenham's algorithm to mask its vicinity
         mask = mask_vicinity(path, mask, max_v, max_h, vwidth)
@@ -408,15 +413,19 @@ def _find_best_candidate(start_mask, end_mask, mask, paths, l_min, l_max, overla
     fitnesses = []    
     n = len(start_mask)
 
+    # j1s and jls respectively contain the column index of the first and last position of all paths
     j1s = np.array([path.j1 for path in paths])
     jls = np.array([path.jl for path in paths])
 
     nbp = len(paths)
 
-    kbs = np.zeros(nbp, dtype=np.int32)
-    kes = np.zeros(nbp, dtype=np.int32)
+    # bs and es will respectively contain the start and end indices of the motifs in the  candidate motif set of the current candidate [b : e].
     bs  = np.zeros(nbp, dtype=np.int32)
     es  = np.zeros(nbp, dtype=np.int32)
+
+    # kbs and kes will respectively contain the index on the path (\in [0 : len(path)]) where the path crosses the vertical line through b and e.
+    kbs = np.zeros(nbp, dtype=np.int32)
+    kes = np.zeros(nbp, dtype=np.int32)
 
     best_fitness   = 0.0
     best_candidate = (0, n) 
@@ -439,7 +448,7 @@ def _find_best_candidate(start_mask, end_mask, mask, paths, l_min, l_max, overla
             emask = jls >= e
             pmask = smask & emask
 
-            # no match
+            # If there are not paths that cross both the vertical line through b and e, skip the candidate.
             if not np.any(pmask[1:]):
                 break
 
@@ -449,13 +458,15 @@ def _find_best_candidate(start_mask, end_mask, mask, paths, l_min, l_max, overla
                 kes[p] = pj = path.find_j(e-1)
                 bs[p] = path[pi][0]
                 es[p] = path[pj][0] + 1
+                # Check overlap with previously found motifs.
                 if np.any(mask[bs[p]:es[p]]): # or es[p] - bs[p] < l_min or es[p] - bs[p] > l_max:
                     pmask[p] = False
 
+            # If the candidate only matches with itself, skip it.
             if not np.any(pmask[1:]):
                 break
 
-            # sort bs and es on bs
+            # Sort bs and es on bs such that overlaps can be calculated efficiently
             bs_ = bs[pmask]
             es_ = es[pmask]
 
@@ -463,7 +474,7 @@ def _find_best_candidate(start_mask, end_mask, mask, paths, l_min, l_max, overla
             bs_ = bs_[perm]
             es_ = es_[perm]
 
-            # Calculate overlaps   
+            # Calculate the overlaps   
             len_     = es_ - bs_
             len_[:-1] = np.minimum(len_[:-1], len_[1:])
             overlaps  = np.maximum(es_[:-1] - bs_[1:] - 1, 0)
