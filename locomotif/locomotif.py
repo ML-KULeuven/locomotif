@@ -21,8 +21,8 @@ def apply_locomotif(series, rho, l_min, l_max, nb=None, start_mask=None, end_mas
     :param warping: Whether warping is allowed (True) or not (False).
     
     :return: motif_sets: a list of motif sets, where each motif set is a list of segments as tuples.
-    """   
-    lcm = get_locomotif_instance(series, rho, l_min, l_max, nb=nb, start_mask=start_mask, end_mask=end_mask, overlap=overlap, warping=warping)
+    """       
+    lcm = get_locomotif_instance(series, rho, l_min, l_max, warping=warping)
     lcm.align()
     lcm.kbest_paths(vwidth=l_min // 2)
     motif_sets = []
@@ -30,22 +30,12 @@ def apply_locomotif(series, rho, l_min, l_max, nb=None, start_mask=None, end_mas
         motif_sets.append(motif_set)
     return motif_sets
 
-def get_locomotif_instance(series, rho, l_min, l_max, nb=None, start_mask=None, end_mask=None, overlap=0.5, warping=True):
-    if start_mask is None:
-        start_mask = np.full(len(series), True)
-    if end_mask is None:
-        end_mask   = np.full(len(series), True)
-
+def get_locomotif_instance(series, rho, l_min, l_max, warping=True):
     if series.ndim == 1:
         series = np.expand_dims(series, axis=1)
-    
-    # TODO
-    n = len(series)
-    assert len(start_mask) == n
-    assert len(end_mask)   == n
+    series = np.array(series, dtype=np.float32)
 
     gamma = 1
-    series = np.array(series, dtype=np.float32)
     sm  = similarity_matrix_ndim(series, series, gamma, only_triu=True)
     tau = estimate_tau_from_am(sm, rho)
 
