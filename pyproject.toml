@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 packages    = ['locomotif']
 
 [project]
-name = "locomotif"
+name = "dtai-locomotif"
 version = "0.1.0"
 description = "Discovering variable-length motif sets in multivariate time series using time warping"
 readme = "README.md"

@@ -10,7 +10,7 @@ The easiest way to install is to use pip.
 ### Install using pip
 
 ```
-TODO
+pip install dtai-locomotif
 ```
 
 You can also install from source.

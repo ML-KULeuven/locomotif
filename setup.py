@@ -1,7 +1,7 @@
 from setuptools import setup
 
 setup(
-    name='locomotif',
+    name='dtai-locomotif',
     packages=['locomotif'],
     description='Discovering variable-length motif sets in multivariate time series using time warping',
     version='0.1.0',
