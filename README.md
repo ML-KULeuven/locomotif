@@ -44,7 +44,7 @@ ts = (ts - np.mean(ts, axis=None)) / np.std(ts, axis=None)
 motif_sets = locomotif.apply_locomotif(ts, l_min=216, l_max=360, rho=0.6)
 ```
 The parameters `l_min` and `l_max` respectively represent the minimum and maximum motif length of the representative of a motif set. The parameter ``rho`` determines the ''strictness'' of the LoCoMotif method; or in other words, how similar the subsequences in a motif set are expected to be. The best value of ``rho`` depends heavily on the application; however, in most of our experiments, a value between ``0.6`` and ``0.8`` always works relatively well.  
-Optionally, we allow you to choose how the allowed overlap between motifs through the `overlap` parameter (which lies between `0.0` and `0.5`), the number of motif sets to be discovered through the `nb` parameter (by default, `nb=None` and LoCoMotif finds all motifs), and whether to use time warping or not through the `warping` parameter (either `True` or `False`)
+Optionally, we allow you to choose the allowed overlap between motifs through the `overlap` parameter (which lies between `0.0` and `0.5`), the number of motif sets to be discovered through the `nb` parameter (by default, `nb=None` and LoCoMotif finds all motifs), and whether to use time warping or not through the `warping` parameter (either `True` or `False`)
 
 The result of LoCoMotif is a list of ``(candidate, motif_set)`` tuples, where each `candidate` is the representative subsequence (the most "central" subsequence) of the corresponding `motif_set`. Each `candidate` is a tuple of two integers `(b, e)` representing the start- and endpoint of the corresponding time segment, while each `motif_set` is a list of such tuples.
 
