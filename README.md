@@ -66,3 +66,6 @@ plt.show()
 </div>
 
 More examples can be found in [this folder](https://github.com/ML-KULeuven/locomotif/tree/main/examples).
+
+## 🚂 License
+This project is licensed under the MIT License - see the [LICENSE](https://github.com/ML-KULeuven/locomotif/blob/main/LICENSE) file for details.
