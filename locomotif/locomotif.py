@@ -34,41 +34,28 @@ def apply_locomotif(ts, l_min, l_max, rho=None, nb=None, start_mask=None, end_ma
         motif_sets.append((representative, motif_set))
     return motif_sets
 
-def get_locomotif_instance(ts, l_min, l_max, rho=None, warping=True):
-    # Handle default rho value
-    if rho is None:
-        rho = 0.8 if warping else 0.5
-    # Make ts of shape (n,) of shape (n, 1) such that it can be handled as a multivariate ts
-    if ts.ndim == 1:
-        ts = np.expand_dims(ts, axis=1)
-    ts = np.array(ts, dtype=np.float32)
-    # Check whether the time series is z-normalized. If not, give a warning.
-    if not util.is_znormalized(ts):
-        import warnings
-        warnings.warn("It is highly recommended to z-normalize the input time series before applying LoCoMotif to it.")
 
-    gamma = 1
-    # Determine values for tau, delta_a, delta_m based on the ssm and rho
-    sm  = similarity_matrix_ndim(ts, ts, gamma, only_triu=True)
-    tau = estimate_tau_from_am(sm, rho)
+def get_locomotif_instance(ts, l_min, l_max, rho=None, warping=True, ts2=None):
+    return LoCoMotif.instance_from_rho(ts, l_min=l_min, l_max=l_max, rho=rho, warping=warping, ts2=ts2)
 
-    delta_a = 2*tau
-    delta_m = 0.5
-    # Determine step_sizes based on warping
-    step_sizes = np.array([(1, 1), (2, 1), (1, 2)]) if warping else np.array([(1, 1)])
-    lcm = LoCoMotif(ts=ts, l_min=l_min, l_max=l_max, gamma=gamma, tau=tau, delta_a=delta_a, delta_m=delta_m, step_sizes=step_sizes)
-    lcm._sm = sm
-    return lcm
 
 class LoCoMotif:
 
-    def __init__(self, ts, l_min, l_max, gamma=1.0, tau=0.5, delta_a=1.0, delta_m=0.5, step_sizes=None):
+    def __init__(self, ts, l_min, l_max, gamma=1.0, tau=0.5, delta_a=1.0, delta_m=0.5, step_sizes=None, ts2=None):
         if step_sizes is None:
             step_sizes = np.array([(1, 1), (2, 1), (1, 2)])
 
+        self._sm_symmetric = True  # Is the SSM symmetric (true when comparing to itself)
         if ts.ndim == 1:
             ts = np.expand_dims(ts, axis=1)
         self.ts = np.array(ts, dtype=np.float32)
+        if ts2 is None:
+            self.ts2 = self.ts
+        else:
+            if ts2.ndim == 1:
+                ts2 = np.expand_dims(ts2, axis=1)
+            self.ts2 = np.array(ts2, dtype=np.float32)
+            self._sm_symmetric = (len(self.ts) == len(self.ts2))
 
         self.l_min = np.int32(l_min)
         self.l_max = np.int32(l_max)
@@ -85,11 +72,52 @@ class LoCoMotif:
         # Local warping paths
         self._paths = None
 
+    @classmethod
+    def instance_from_rho(cls, ts, l_min, l_max, rho=None, warping=True, ts2=None):
+        # Handle default rho value
+        if rho is None:
+            rho = 0.8 if warping else 0.5
+        # Make ts of shape (n,) of shape (n, 1) such that it can be handled as a multivariate ts
+        if ts.ndim == 1:
+            ts = np.expand_dims(ts, axis=1)
+        ts = np.array(ts, dtype=np.float32)
+        if ts2 is None:
+            ts2 = ts
+            issym = True
+        else:
+            if ts2.ndim == 1:
+                ts2 = np.expand_dims(ts2, axis=1)
+            ts2 = np.array(ts2, dtype=np.float32)
+            issym = (len(ts) == len(ts2))
+        # Check whether the time series is z-normalized. If not, give a warning.
+        if not util.is_znormalized(ts):
+            import warnings
+            warnings.warn(
+                "It is highly recommended to z-normalize the input time series before applying LoCoMotif to it.")
+
+        gamma = 1
+        # Determine values for tau, delta_a, delta_m based on the ssm and rho
+        sm = similarity_matrix_ndim(ts, ts2, gamma, only_triu=issym)
+        tau = estimate_tau_from_am(sm, rho)
+
+        delta_a = 2 * tau
+        delta_m = 0.5
+        # Determine step_sizes based on warping
+        step_sizes = np.array([(1, 1), (2, 1), (1, 2)]) if warping else np.array([(1, 1)])
+        lcm = cls(ts=ts, l_min=l_min, l_max=l_max, gamma=gamma, tau=tau, delta_a=delta_a, delta_m=delta_m,
+                  step_sizes=step_sizes, ts2=ts2)
+        lcm._sm = sm
+        return lcm
+
     def align(self):
         if self._sm is None:
-            self._sm  = similarity_matrix_ndim(self.ts, self.ts, gamma=self.gamma, only_triu=True)
+            self._sm  = similarity_matrix_ndim(self.ts, self.ts2, gamma=self.gamma,
+                                               only_triu=self._sm_symmetric)
         if self._csm is None:
-            self._csm = cumulative_similarity_matrix(self._sm, tau=self.tau, delta_a=self.delta_a, delta_m=self.delta_m, step_sizes=self.step_sizes, only_triu=True)
+            self._csm = cumulative_similarity_matrix(self._sm, tau=self.tau,
+                                                     delta_a=self.delta_a, delta_m=self.delta_m,
+                                                     step_sizes=self.step_sizes,
+                                                     only_triu=self._sm_symmetric)
 
     
     def find_best_paths(self, vwidth):
@@ -103,24 +131,26 @@ class LoCoMotif:
         # Hardcode diagonal (this is only needed if step_sizes=[(1, 1), (0, 1), (1, 0)]).
         #   - First, mask region around the diagional as if the diagonal is already found as a path.
         #   - After applying LoCo, add the diagonal to the result.
-        mask = np.full(self._csm.shape, True)
-        mask[np.triu_indices(len(mask), k=vwidth)] = False
+        mask = np.full(self._csm.shape, self._sm_symmetric)
+        if self._sm_symmetric:
+            mask[np.triu_indices(len(mask), k=vwidth)] = False
         # LoCo is only applied to the part of the SSM above the diagonal. Later, the mirrored versions of the found paths are added.
         paths = _find_best_paths(self._csm, mask, l_min=self.l_min, vwidth=vwidth, step_sizes=self.step_sizes)
-        diagonal = np.vstack(np.diag_indices(len(self.ts))).astype(np.int32).T
         self._paths = List()
-        # self._paths = []
-        self._paths.append(Path(diagonal, np.ones(len(diagonal)).astype(np.float32)))
+        if self._sm_symmetric:
+            diagonal = np.vstack(np.diag_indices(len(self.ts))).astype(np.int32).T
+            self._paths.append(Path(diagonal, np.ones(len(diagonal)).astype(np.float32)))
         
         for path in paths:
             i, j = path[:, 0], path[:, 1]
             path_similarities = self._sm[i, j]
             self._paths.append(Path(path, path_similarities))
-            # Also add the mirrored path
-            path_mirrored = np.zeros(path.shape, dtype=np.int32)
-            path_mirrored[:, 0] = np.copy(path[:, 1])
-            path_mirrored[:, 1] = np.copy(path[:, 0])
-            self._paths.append(Path(path_mirrored, path_similarities))
+            if self._sm_symmetric:
+                # Also add the mirrored path
+                path_mirrored = np.zeros(path.shape, dtype=np.int32)
+                path_mirrored[:, 0] = np.copy(path[:, 1])
+                path_mirrored[:, 1] = np.copy(path[:, 0])
+                self._paths.append(Path(path_mirrored, path_similarities))
 
         return self._paths
 
