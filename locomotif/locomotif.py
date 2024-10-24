@@ -55,7 +55,7 @@ class LoCoMotif:
             if ts2.ndim == 1:
                 ts2 = np.expand_dims(ts2, axis=1)
             self.ts2 = np.array(ts2, dtype=np.float32)
-            self._sm_symmetric = (len(self.ts) == len(self.ts2))
+            self._sm_symmetric = False
 
         self.l_min = np.int32(l_min)
         self.l_max = np.int32(l_max)
@@ -88,7 +88,7 @@ class LoCoMotif:
             if ts2.ndim == 1:
                 ts2 = np.expand_dims(ts2, axis=1)
             ts2 = np.array(ts2, dtype=np.float32)
-            issym = (len(ts) == len(ts2))
+            issym = False
         # Check whether the time series is z-normalized. If not, give a warning.
         if not util.is_znormalized(ts):
             import warnings
