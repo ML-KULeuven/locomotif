@@ -90,10 +90,10 @@ class LoCoMotif:
             ts2 = np.array(ts2, dtype=np.float32)
             issym = False
         # Check whether the time series is z-normalized. If not, give a warning.
-        if not util.is_znormalized(ts):
+        if not util.is_unitstd(ts): # util.is_znormalized(ts):
             import warnings
             warnings.warn(
-                "It is highly recommended to z-normalize the input time series before applying LoCoMotif to it.")
+                "It is highly recommended to z-normalize the input time series so that it has a standard deviation of 1 before applying LoCoMotif to it.")
 
         gamma = 1
         # Determine values for tau, delta_a, delta_m based on the ssm and rho
