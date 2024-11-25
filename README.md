@@ -50,7 +50,7 @@ The result of LoCoMotif is a list of ``(candidate, motif_set)`` tuples, where ea
 
 ```python
 print(motif_sets)
->>> [((2666, 2932), [(2666, 2932), (1892, 2137), (1038, 1333), (3168, 3490), (2334, 2666), (628, 1036), (1589, 1893), (1, 261)]), ((1333, 1565), [(1333, 1565), (2137, 2333), (2932, 3162)])]
+>>> [((2666, 2931), [(2666, 2931), (1892, 2136), (1038, 1332), (2334, 2665), (628, 1035), (1589, 1892), (1, 260)]), ((2931, 3155), [(2931, 3155), (2136, 2333), (1332, 1558)])]
 ```
 
 We also include a visualization module, ``visualize``, to plot the time series together with the found motifs:

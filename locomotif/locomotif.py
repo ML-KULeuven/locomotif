@@ -503,7 +503,7 @@ def _find_best_candidate(start_mask, end_mask, mask, paths, l_min, l_max, overla
             # Calculate the overlaps   
             len_     = es_ - bs_
             len_[:-1] = np.minimum(len_[:-1], len_[1:])
-            overlaps  = np.maximum(es_[:-1] - bs_[1:] - 1, 0)
+            overlaps  = np.maximum(es_[:-1] - bs_[1:], 0)
             
             # Overlap check within motif set
             if np.any(overlaps > overlap * len_[:-1]): 
