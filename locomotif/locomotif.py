@@ -534,9 +534,10 @@ def _find_best_candidate(start_mask, end_mask, mask, paths, l_min, l_max, overla
 
             # Store fitness if necessary
             if keep_fitnesses:
-                fitnesses.append((b, e, fit, n_coverage, n_score))
-    
-    fitnesses = np.array(fitnesses, dtype=np.float32) if keep_fitnesses else np.empty((0, 5), dtype=np.float32)
+                fitnesses.append((float(b), float(e), float(fit), float(n_coverage), float(n_score)))
+
+    fitnesses = (
+        np.array(fitnesses, dtype=np.float32) if keep_fitnesses and fitnesses else np.empty((0, 5), dtype=np.float32))
     return best_candidate, best_fitness, fitnesses
 
 
