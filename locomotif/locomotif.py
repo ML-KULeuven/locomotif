@@ -45,18 +45,19 @@ class LoCoMotif:
         if step_sizes is None:
             step_sizes = np.array([(1, 1), (2, 1), (1, 2)])
 
-        self._sm_symmetric = True  # Is the SSM symmetric (true when comparing to itself)
         if ts.ndim == 1:
             ts = np.expand_dims(ts, axis=1)
         self.ts = np.array(ts, dtype=np.float32)
+        
         if ts2 is None:
             self.ts2 = self.ts
         else:
             if ts2.ndim == 1:
                 ts2 = np.expand_dims(ts2, axis=1)
             self.ts2 = np.array(ts2, dtype=np.float32)
-            self._sm_symmetric = False
-
+        
+        self._sm_symmetric = np.array_equal(self.ts, self.ts2)  # Is the SSM symmetric (true when comparing to itself)
+            
         self.l_min = np.int32(l_min)
         self.l_max = np.int32(l_max)
         self.step_sizes = step_sizes.astype(np.int32)
@@ -77,20 +78,23 @@ class LoCoMotif:
         # Handle default rho value
         if rho is None:
             rho = 0.8 if warping else 0.5
+            
         # Make ts of shape (n,) of shape (n, 1) such that it can be handled as a multivariate ts
         if ts.ndim == 1:
             ts = np.expand_dims(ts, axis=1)
         ts = np.array(ts, dtype=np.float32)
+        
         if ts2 is None:
             ts2 = ts
-            issym = True
         else:
             if ts2.ndim == 1:
                 ts2 = np.expand_dims(ts2, axis=1)
             ts2 = np.array(ts2, dtype=np.float32)
-            issym = False
-        # Check whether the time series is z-normalized. If not, give a warning.
-        if not util.is_unitstd(ts): # util.is_znormalized(ts):
+        
+        issym = np.array_equal(ts, ts2)
+            
+        # Check whether the time series are z-normalized. If not, give a warning.
+        if not util.is_unitstd(ts) or (not ts2 is None and not util.is_unitstd(ts2)): # util.is_znormalized(ts):
             import warnings
             warnings.warn(
                 "It is highly recommended to z-normalize the input time series so that it has a standard deviation of 1 before applying LoCoMotif to it.")
@@ -98,7 +102,7 @@ class LoCoMotif:
         gamma = 1
         # Determine values for tau, delta_a, delta_m based on the ssm and rho
         sm = similarity_matrix_ndim(ts, ts2, gamma, only_triu=issym)
-        tau = estimate_tau_from_am(sm, rho)
+        tau = estimate_tau_from_sm(sm, rho, only_triu=issym)
 
         delta_a = 2 * tau
         delta_m = 0.5
@@ -210,7 +214,7 @@ class LoCoMotif:
     def get_paths(self):
         return [path.path for path in self._paths]
     
-    def get_ssm(self):
+    def get_sm(self):
         return self._sm
 
 
@@ -273,8 +277,11 @@ def estimate_tau_from_std(ts, f, gamma=None):
     return tau, gamma
 
 # page 194 of Fundamentals of Music Processing
-def estimate_tau_from_am(am, rho):
-    tau = np.quantile(am[np.triu_indices(len(am))], rho, axis=None)
+def estimate_tau_from_sm(sm, rho, only_triu=False):
+    if only_triu:
+        tau = np.quantile(sm[np.triu_indices(len(sm))], rho, axis=None)
+    else:
+        tau = np.quantile(sm, rho, axis=None)
     return tau
         
 # Project paths to the vertical axis
@@ -536,7 +543,7 @@ def _find_best_candidate(start_mask, end_mask, mask, paths, l_min, l_max, overla
             if keep_fitnesses:
                 fitnesses.append((b, e, fit, n_coverage, n_score))
     
-    fitnesses = np.array(fitnesses, dtype=np.float32) if keep_fitnesses else np.empty((0, 5), dtype=np.float32)
+    fitnesses = np.array(fitnesses, dtype=np.float32) if keep_fitnesses and fitnesses else np.empty((0, 5), dtype=np.float32)
     return best_candidate, best_fitness, fitnesses
 
 
