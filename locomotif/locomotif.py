@@ -70,7 +70,7 @@ class LoCoMotif:
         else:
             # Else, len(gamma) should be equal to the number of dimensions
             assert np.ndim(gamma) == 1 and len(gamma) == D
-        gamma = np.array(gamma, np.float64)
+        self.gamma = np.array(gamma, np.float64)
 
         self.tau = tau
         self.delta_a = delta_a
