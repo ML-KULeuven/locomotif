@@ -38,7 +38,6 @@ def apply_locomotif(ts, l_min, l_max, rho=None, nb=None, start_mask=None, end_ma
 def get_locomotif_instance(ts, l_min, l_max, rho=None, warping=True, ts2=None):
     return LoCoMotif.instance_from_rho(ts, l_min=l_min, l_max=l_max, rho=rho, warping=warping, ts2=ts2)
 
-
 class LoCoMotif:
 
     def __init__(self, ts, l_min, l_max, gamma=1.0, tau=0.5, delta_a=1.0, delta_m=0.5, step_sizes=None, ts2=None):
@@ -62,7 +61,17 @@ class LoCoMotif:
         self.l_max = np.int32(l_max)
         self.step_sizes = step_sizes.astype(np.int32)
         # LoCo arguments
-        self.gamma = gamma
+        
+        # Handle the gamma argument.
+        _, D = ts.shape
+        # If gamma is a single value, we assume it is the same for every dimension. 
+        if np.isscalar(gamma):
+            gamma = D * [gamma]
+        else:
+            # Else, len(gamma) should be equal to the number of dimensions
+            assert np.ndim(gamma) == 1 and len(gamma) == D
+        gamma = np.array(gamma, np.float64)
+
         self.tau = tau
         self.delta_a = delta_a
         self.delta_m = delta_m
@@ -74,7 +83,7 @@ class LoCoMotif:
         self._paths = None
 
     @classmethod
-    def instance_from_rho(cls, ts, l_min, l_max, rho=None, warping=True, ts2=None):
+    def instance_from_rho(cls, ts, l_min, l_max, rho=None, warping=True, ts2=None, equal_weight_dims=False):
         # Handle default rho value
         if rho is None:
             rho = 0.8 if warping else 0.5
@@ -84,23 +93,26 @@ class LoCoMotif:
             ts = np.expand_dims(ts, axis=1)
         ts = np.array(ts, dtype=np.float32)
         
+        # Handle ts2
         if ts2 is None:
             ts2 = ts
         else:
             if ts2.ndim == 1:
                 ts2 = np.expand_dims(ts2, axis=1)
             ts2 = np.array(ts2, dtype=np.float32)
-        
         issym = np.array_equal(ts, ts2)
             
-        # Check whether the time series are z-normalized. If not, give a warning.
-        if not util.is_unitstd(ts) or (not ts2 is None and not util.is_unitstd(ts2)): # util.is_znormalized(ts):
-            import warnings
-            warnings.warn(
-                "It is highly recommended to z-normalize the input time series so that it has a standard deviation of 1 before applying LoCoMotif to it.")
-
-        gamma = 1
-        # Determine values for tau, delta_a, delta_m based on the ssm and rho
+        # Get the right gamma values for the LoCoMotif algorithm.
+        _, D = ts.shape
+        if issym:
+            if D == 1 or not equal_weight_dims:
+                gamma = D * [1 / np.std(ts, axis=None)**2]
+            else:
+                gamma = [1 / np.std(ts[:, d])**2 for d in range(D)]
+        else:
+            gamma = D * [1.0]
+        gamma = np.array(gamma, dtype=np.float64)
+            
         sm = similarity_matrix_ndim(ts, ts2, gamma, only_triu=issym)
         tau = estimate_tau_from_sm(sm, rho, only_triu=issym)
 
@@ -293,8 +305,8 @@ def horizontal_projections(paths):
     return [(p[0][1], p[len(p)-1][1]+1) for p in paths]
 
 
-@njit(float32[:, :](float32[:, :], float32[:, :], float64, boolean))
-def similarity_matrix_ndim(series1, series2, gamma=1.0, only_triu=False):
+@njit(float32[:, :](float32[:, :], float32[:, :], float64[:], boolean))
+def similarity_matrix_ndim(series1, series2, gamma=None, only_triu=False):
     n, m = len(series1), len(series2)
 
     sm = np.full((n, m), -np.inf, dtype=float32)
@@ -303,7 +315,8 @@ def similarity_matrix_ndim(series1, series2, gamma=1.0, only_triu=False):
         j_start = i if only_triu else 0
         j_end   = m
         
-        similarities = np.exp(-gamma * np.sum(np.power(series1[i, :] - series2[j_start:j_end, :], 2), axis=1))
+        similarities = np.exp(-np.sum(gamma.T * np.power(series1[i, :] - series2[j_start:j_end, :], 2), axis=1))
+        
         sm[i, j_start:j_end] = similarities
 
     return sm
