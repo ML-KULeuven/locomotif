@@ -124,7 +124,6 @@ class LoCoMotif:
             end_mask[mask]   = False
         
             (b, e), best_fitness, fitnesses  = _find_best_candidate(start_mask, end_mask, mask, paths=self._paths, l_min=self.l_min, l_max=self.l_max, overlap=overlap, keep_fitnesses=False)
-            print(best_fitness)
 
             if best_fitness == 0.0:
                 break
