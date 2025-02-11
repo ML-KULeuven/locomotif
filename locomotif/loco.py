@@ -189,11 +189,6 @@ def max_warping_path(csm, mask, i, j, step_sizes=np.array([[1, 1], [2, 1], [1, 2
     path.reverse()
     return np.array(path, dtype=np.int32)
 
-@njit(boolean[:, :](int32[:, :], boolean[:, :], int32, int32))
-def mask_path(path, mask, max_v, max_h):
-    for (i, j) in path:
-        mask[i + max_h, j + max_v] = True
-    return mask
 
 @njit(boolean[:, :](int32[:, :], boolean[:, :], int32, int32, int32))
 def mask_vicinity(path, mask, max_v, max_h, vwidth=10):
@@ -216,8 +211,8 @@ def mask_vicinity(path, mask, max_v, max_h, vwidth=10):
                 err += di
                 jc  += 1
 
-    mask[it-vwidth:it+vwidth+1, jt] = True
-    mask[it, jt-vwidth:jt+vwidth+1] = True
+    mask[ic-vwidth:ic+vwidth+1, jc] = True
+    mask[ic, jc-vwidth:jc+vwidth+1] = True
     return mask
 
 @njit(numba.types.List(int32[:, :])(float32[:, :], boolean[:, :], int32, int32, int32[:, :]))
@@ -261,7 +256,7 @@ def _find_best_paths(csm, mask, l_min=10, vwidth=5, step_sizes=np.array([[1, 1],
             # Reconstruct the path
             path = max_warping_path(csm, mask, i_best, j_best, step_sizes=step_sizes)
             # Mask the indices on path
-            mask = mask_path(path, mask, max_v, max_h)
+            mask = mask_vicinity(path, mask, max_v, max_h, vwidth=0)
 
             # Discard if any projection of path is shorter than the minimum motif length  
             if (path[-1][0] - path[0][0] + 1) >= l_min or (path[-1][1] - path[0][1] + 1) >= l_min:
