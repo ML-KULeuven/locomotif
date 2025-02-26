@@ -131,7 +131,8 @@ class LoCoMotif:
             motif_set = [project_to_vertical_axis(induced_path) for induced_path in self.induced_paths(b, e, mask)]
             for (b_m, e_m) in motif_set:
                 l = e_m - b_m
-                mask[b_m + int(overlap * l) : e_m - int(overlap * l)] = True
+                l_mask = max(1, int((1 - 2*overlap) * l)) # mask length must be lower bounded by 1 (otherwise, nothing is masked when overlap=0.5)
+                mask[b_m + (l - l_mask)//2 : b_m + (l - l_mask)//2 + l_mask] = True
 
             current_nb += 1
             yield (b, e), motif_set, fitnesses
