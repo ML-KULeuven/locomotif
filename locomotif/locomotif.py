@@ -108,6 +108,9 @@ class LoCoMotif:
             start_mask = np.full(n, True)
         if end_mask is None:
             end_mask   = np.full(n, True)
+
+        start_mask = start_mask.copy()
+        end_mask   = end_mask.copy()
     
         assert 0.0 <= overlap and overlap <= 0.5
         assert start_mask.shape == (n,)

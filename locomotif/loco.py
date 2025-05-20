@@ -1,6 +1,5 @@
 import numpy as np
 
-from . import loco_cc
 from . import loco_jit
 
 class LoCo:
