@@ -1,9 +1,12 @@
 <p align="center">
-  <img src="./logo.png" alt="LoCoMotif Logo" width="350"/>
+  <picture>
+    <source srcset="./logo_dark.png" media="(prefers-color-scheme: dark)" />
+    <source srcset="./logo_light.png" media="(prefers-color-scheme: light)" />
+    <img src="./logo_light.png" alt="LoCoMotif Logo" width="350" />
+  </picture>
 </p>
 
 <h1 align="left">LoCoMotif: Discovering time-warped motifs in time series </h1>
-
 
 This repository contains the implementation of LoCoMotif, a method for time series motif discovery (TSMD). LoCoMotif stands out from existing methods as it can detect variable-length motifs (motifs of different durations), time-warped motifs (with slight temporal misalignments, as handled by Dynamic Time Warping), and multivariate motifs (spanning multiple dimensions). It was introduced in this [publication](https://link.springer.com/article/10.1007/s10618-024-01032-z).
 
