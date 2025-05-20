@@ -1,9 +1,14 @@
+<p align="center">
+  <img src="./logo.png" alt="LoCoMotif Logo" width="350"/>
+</p>
+
 <h1 align="left">LoCoMotif: Discovering time-warped motifs in time series </h1>
 
-This repository contains the implementation of the time series motif discovery (TSMD) method called LoCoMotif. LoCoMotif is a novel TSMD method that stands out from existing methods as it able to discover motifs that have different lengths (*variable-length* motifs), exhibit slight temporal differences (*time-warped* motifs), and span multiple dimensions (*multivariate* motifs). LoCoMotif was proposed in this [publication](https://link.springer.com/article/10.1007/s10618-024-01032-z).
+
+This repository contains the implementation of LoCoMotif, a method for time series motif discovery (TSMD). LoCoMotif stands out from existing methods as it can detect variable-length motifs (motifs of different durations), time-warped motifs (with slight temporal misalignments, as handled by Dynamic Time Warping), and multivariate motifs (spanning multiple dimensions). It was introduced in this [publication](https://link.springer.com/article/10.1007/s10618-024-01032-z).
 
 
-## 🚂  Installation
+## 🛤️  Installation
 The easiest way to install is to use pip.
 
 
@@ -67,5 +72,5 @@ plt.show()
 
 More examples can be found in [this folder](https://github.com/ML-KULeuven/locomotif/tree/main/examples).
 
-## 🚂 License
+## 📃 License
 This project is licensed under the MIT License - see the [LICENSE](https://github.com/ML-KULeuven/locomotif/blob/main/LICENSE) file for details.
