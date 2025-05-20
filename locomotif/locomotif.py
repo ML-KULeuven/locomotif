@@ -41,27 +41,25 @@ def get_locomotif_instance(ts, l_min, l_max, rho=None, warping=True):
 
 class LoCoMotif:
 
-    def __init__(self, ts, l_min, l_max, gamma=None, tau=0.5, delta_a=1.0, delta_m=0.5, step_sizes=None):
-        if step_sizes is None:
-            step_sizes = np.array([(1, 1), (2, 1), (1, 2)])
-            
+    def __init__(self, ts, l_min, l_max, gamma=None, tau=0.5, delta_a=1.0, delta_m=0.5, warping=True):        
         self.ts = ts
+        l_min = max(4, l_min)
         self.l_min = np.int32(l_min)
         self.l_max = np.int32(l_max)
         # LoCo instance
-        self._loco = loco.LoCo(ts, gamma=gamma, tau=tau, delta_a=delta_a, delta_m=delta_m, step_sizes=step_sizes)
+        self._loco = loco.LoCo(ts, gamma=gamma, tau=tau, delta_a=delta_a, delta_m=delta_m, warping=warping)
+        self._paths = None
 
     @classmethod
     def instance_from_rho(cls, ts, l_min, l_max, rho=None, warping=True):
-        # Handle default rho value
+        # Default rho value
         if rho is None:
             rho = 0.8 if warping else 0.5  
-        step_sizes = np.array([(1, 1), (2, 1), (1, 2)]) if warping else np.array([(1, 1)])
         lcm = cls(ts=ts, l_min=l_min, l_max=l_max)
-        lcm._loco = loco.LoCo.instance_from_rho(ts, rho, gamma=None, step_sizes=step_sizes)
+        lcm._loco = loco.LoCo.instance_from_rho(ts, rho, gamma=None, warping=warping)
         return lcm
 
-    def find_best_paths(self, vwidth):
+    def find_best_paths(self, vwidth=None):
         vwidth = np.maximum(10, self.l_min // 2)
         paths = self._loco.find_best_paths(self.l_min, vwidth)
        
@@ -100,7 +98,10 @@ class LoCoMotif:
         return induced_paths
 
     # iteratively finds the best motif set
-    def find_best_motif_sets(self, nb=None, start_mask=None, end_mask=None, overlap=0.0):
+    def find_best_motif_sets(self, nb=None, start_mask=None, end_mask=None, overlap=0.0, keep_fitnesses=False):
+        if self._paths is None:
+            self.find_best_paths()
+            
         n = len(self.ts)
         # Handle masks
         if start_mask is None:
@@ -122,8 +123,8 @@ class LoCoMotif:
 
             start_mask[mask] = False
             end_mask[mask]   = False
-        
-            (b, e), best_fitness, fitnesses  = _find_best_candidate(start_mask, end_mask, mask, paths=self._paths, l_min=self.l_min, l_max=self.l_max, overlap=overlap, keep_fitnesses=False)
+
+            (b, e), best_fitness, fitnesses = _find_best_candidate(self._paths, n, self.l_min, self.l_max, overlap, mask, mask, start_mask, end_mask, keep_fitnesses=keep_fitnesses)
 
             if best_fitness == 0.0:
                 break
@@ -150,92 +151,216 @@ class LoCoMotif:
         return self._loco.cumulative_similarity_matrix
     
 
-@njit(numba.types.Tuple((numba.types.UniTuple(int32, 2), float32, float32[:, :]))(boolean[:], boolean[:], boolean[:], numba.types.ListType(Path.class_type.instance_type), int32, int32, float64, boolean))
-def _find_best_candidate(start_mask, end_mask, mask, paths, l_min, l_max, overlap=0.0, keep_fitnesses=False):
-    fitnesses = []    
-    n = len(start_mask)
+from numba.experimental import jitclass
 
-    # j1s and jls respectively contain the column index of the first and last position of each path
-    j1s = np.array([path.j1 for path in paths])
-    jls = np.array([path.jl for path in paths])
+@jitclass([
+    ('keys', int32[:]),    
+    ('path_indices', int32[:]),
+    ('size', int32),      
+    ('capacity', int32),
+    ('P', numba.types.ListType(Path.class_type.instance_type)),
+    ('j1s', int32[:]),
+    ('jls', int32[:]),
+    ('Q', int32[:]),
+    ('q', int32),
+    ('j', int32),
+])
+class SortedPathArray:
 
-    nb_paths = len(paths)
+    def __init__(self, P, j, capacity):
+        """Initialize a sorted list where 'keys' are sorted, and 'values' (indices) follow."""
+        self.P = P
+        self.keys = np.empty(capacity, np.int32)
+        self.path_indices = np.empty(capacity, np.int32)
+        
+        self.size = 0
+        self.capacity = capacity
 
-    # bs and es will respectively contain the start and end indices of the motifs in the candidate motif set of the current candidate [b : e].
-    bs  = np.zeros(nb_paths, dtype=np.int32)
-    es  = np.zeros(nb_paths, dtype=np.int32)
+        self.j1s = np.array([path.j1 for path in P], np.int32)
+        self.jls = np.array([path.jl for path in P], np.int32)
 
-    # kbs and kes will respectively contain the index on the path (\in [0 : len(path)]) where the path crosses the vertical line through b and e.
-    kbs = np.zeros(nb_paths, dtype=np.int32)
-    kes = np.zeros(nb_paths, dtype=np.int32)
+        # Sort the paths on j1. This is the order in which they become relevant.
+        self.Q = np.argsort(self.j1s).astype(np.int32)
+        self.q = 0
+
+        # TODO: Can be implemented more efficiently
+        self.j = -1
+        for _ in range(j+1):
+            self.increment_j()
+
+
+    def increment_j(self):
+        self.j += 1
+
+        # Remove the paths for which jl == j
+        k_remove = 0
+        for _ in range(self.size):
+            if self.jls[self.path_indices[k_remove]] == self.j:
+                self._remove_at(k_remove)
+            else:
+                k_remove += 1
+
+        # If a path will be inserted, update the keys
+        # if self.j1s[self.Q[self.q]] == self.j:
+        self._update_keys()
+
+        # Insert all paths for which j1 == b
+        for q in range(self.q, len(self.P)):
+            path_index = self.Q[q]
+            if self.j1s[path_index] == self.j:
+                self._insert(path_index)
+            else:
+                break
+        self.q = q
+
+
+    def get_path_at(self, k):
+        return self.P[self.path_indices[k]]
+
+    def _update_keys(self):
+        # Update the keys (as paths cannot cross, the ordering of keys does not change)
+        for k in range(self.size):
+            path_to_update = self.get_path_at(k)
+            self.keys[k] = path_to_update[path_to_update.find_j(self.j)][0]
+  
+    def _insert(self, path_index):
+        """Insert (key, value) while maintaining sorted order of keys."""
+        assert self.size < self.capacity
+        # Binary search to find the correct position of the key
+        path_to_insert = self.P[path_index]
+        key = path_to_insert[path_to_insert.find_j(self.j)][0]
+
+        k = np.searchsorted(self.keys[:self.size], key)
+        # Shift items to the right
+        self.keys[k+1:self.size+1] = self.keys[k:self.size]
+        self.path_indices[k+1:self.size+1] = self.path_indices[k:self.size]
+        # Insert the new item
+        self.keys[k] = key
+        self.path_indices[k] = path_index 
+        # Increase size
+        self.size += 1 
+
+    def _remove_at(self, k):
+        """Removes an item at a specific index."""
+        assert k >= 0 and k < self.size
+        # Shift elements left to fill the gap
+        self.keys[k:self.size-1] = self.keys[k+1:self.size]
+        self.path_indices[k:self.size-1] = self.path_indices[k+1:self.size]
+        # Last element need not be cleared
+        self.size -= 1  # Decrease size
+
+
+@njit(numba.types.Tuple((numba.types.UniTuple(int32, 2), float32, float32[:, :]))(numba.types.ListType(Path.class_type.instance_type), int32, int32, int32, float32, boolean[:], boolean[:], boolean[:], boolean[:], boolean), cache=True)
+def _find_best_candidate(P, n, l_min, l_max, nu, row_mask, col_mask, start_mask, end_mask, keep_fitnesses=False):
+    fitnesses = []
+    # n is used for coverage normalization 
+    r = len(row_mask)
+    c = len(col_mask)
+
+    # Max number of relevant paths
+    max_size = int(np.ceil(r / (l_min // 2 + 1))) 
+    # Initialize Pb
+    Pb  = SortedPathArray(P, -1, max_size)
+    # Pe is implemented as a mask
+    Pe  = np.zeros(max_size)
+    # Initialize
+    es_checked = np.zeros(max_size, dtype=np.int32)
 
     best_fitness   = 0.0
-    best_candidate = (0, n) 
+    best_candidate = (0, 0) 
 
-    for b in range(n - l_min + 1):
+    # b-loop
+    for b_repr in range(c - l_min + 1):
+        Pb.increment_j()
+
+        nb_paths = Pb.size
         
-        if not start_mask[b]:
+        # If less than 2 paths in Pb, skip this b.
+        if nb_paths < 2 or not start_mask[b_repr] or col_mask[b_repr]:
             continue
-            
-        smask = j1s <= b
 
-        for e in range(b + l_min, min(n + 1, b + l_max + 1)):
-            
-            if not end_mask[e-1]:
+        ### Check initial coincidence with previously discovered motifs
+        # For the representative
+        if np.any(col_mask[b_repr:b_repr + l_min - 1]):
+            continue
+
+        # For each of the induced segments
+        Pe[:nb_paths] = True
+        es_checked[:nb_paths] = Pb.keys[:nb_paths] 
+        nb_remaining_paths = nb_paths
+
+        for e_repr in range(b_repr + l_min, min(c + 1, b_repr + l_max + 1)):
+
+            # Check coincidence with previously found motifs
+            # For the representative 
+            if col_mask[e_repr-1]:
+                break
+
+            # Skip iteration if representative cannot end at this index
+            if not end_mask[e_repr-1]:
                 continue
 
-            if np.any(mask[b:e]):
-                break
+            # Calculate the fitness
+            score = 0.0
+            total_length = 0.0
+            total_path_length = 0.0
+            total_overlap = 0.0
+            l_prev = 0
+            e_prev = 0
+            too_much_overlap = False
 
-            emask = jls >= e
-            pmask = smask & emask
+            for k in range(nb_paths):
 
-            # If there's only one relevant path, skip the candidate.
-            if np.sum(pmask) < 2:
-                break
+                if nb_remaining_paths < 2:
+                    break
 
-            for path_index in np.flatnonzero(pmask):
-                path = paths[path_index]
-                kbs[path_index] = kb = path.find_j(b)
-                kes[path_index] = ke = path.find_j(e-1)
-                bs[path_index] = path[kb][0]
-                es[path_index] = path[ke][0] + 1
-                # Check overlap with previously found motifs.
-                if np.any(mask[bs[path_index]:es[path_index]]): # or es[p] - bs[p] < l_min or es[p] - bs[p] > l_max:
-                    pmask[path_index] = False
+                if not Pe[k]:
+                    continue
 
-            # If there's less than matches, skip the candidate.
-            if np.sum(pmask) < 2:
-                break
+                path = Pb.get_path_at(k)
+                if path.jl < e_repr:
+                    Pe[k] = False
+                    nb_remaining_paths -= 1
+                    continue
 
-            # Sort bs and es on bs such that overlaps can be calculated efficiently
-            bs_ = bs[pmask]
-            es_ = es[pmask]
+                kb = path.find_j(b_repr)
+                b = path[kb][0]
+                ke = path.find_j(e_repr-1)
+                e  = path[ke][0] + 1
+                
+                if np.any(row_mask[es_checked[k]:e]):
+                    Pe[k] = False
+                    nb_remaining_paths -= 1
+                    continue
+                es_checked[k] = e
 
-            perm = np.argsort(bs_)
-            bs_ = bs_[perm]
-            es_ = es_[perm]
-
-            # Calculate the overlaps   
-            len_     = es_ - bs_
-            len_[:-1] = np.minimum(len_[:-1], len_[1:])
-            overlaps  = np.maximum(es_[:-1] - bs_[1:], 0)
+                l = e - b
+                # Handle overlap within motif set
+                if k > 0:
+                    overlap = max(0, e_prev - b)
+                    if nu * min(l, l_prev) < overlap:
+                        too_much_overlap = True
+                        break
+                    total_overlap += overlap
             
-            # Overlap check within motif set
-            if np.any(overlaps > overlap * len_[:-1]): 
+                total_length += l
+                total_path_length += ke - kb + 1
+                score += path.cumulative_similarities[ke+1] - path.cumulative_similarities[kb]
+
+                l_prev = l
+                e_prev = e
+
+            if nb_remaining_paths < 2:
+                break
+
+            if too_much_overlap:
                 continue
 
-            # Calculate normalized coverage
-            coverage = np.sum(es_ - bs_) - np.sum(overlaps)
-            n_coverage = (coverage - (e - b)) / float(n)
+            # Calculate normalized score and coverage
+            l_repr = e_repr - b_repr
+            n_score = (score - l_repr) / total_path_length
+            n_coverage = (total_length - total_overlap - l_repr) / float(n)
 
-            # Calculate normalized score
-            score = 0
-            for path_index in np.flatnonzero(pmask):
-                score += paths[path_index].cumulative_similarities[kes[path_index]+1] - paths[path_index].cumulative_similarities[kbs[path_index]]
-
-            n_score = (score - (e - b)) / float(np.sum(kes[pmask] - kbs[pmask] + 1))
-            
             # Calculate the fitness value
             fit = 0.0
             if n_coverage != 0 or n_score != 0:
@@ -246,14 +371,13 @@ def _find_best_candidate(start_mask, end_mask, mask, paths, l_min, l_max, overla
 
             # Update best fitness
             if fit > best_fitness:
-                best_candidate = (b, e)
+                best_candidate = (b_repr, e_repr)
                 best_fitness   = fit
 
             # Store fitness if necessary
             if keep_fitnesses:
-                fitnesses.append((b, e, fit, n_coverage, n_score))
-    
+                fitnesses.append((b_repr, e_repr, fit, n_coverage, n_score))
+        
     fitnesses = np.array(fitnesses, dtype=np.float32) if keep_fitnesses and fitnesses else np.empty((0, 5), dtype=np.float32)
+
     return best_candidate, best_fitness, fitnesses
-
-

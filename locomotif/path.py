@@ -15,7 +15,7 @@ class Path:
         self.il = path[len(path) - 1][0] + 1
         self.j1 = path[0][1]
         self.jl = path[len(path) - 1][1] + 1
-        self._construct_index(path)
+        self._construct_index()
 
     def __getitem__(self, i):
         return self.path[i, :]
@@ -23,7 +23,8 @@ class Path:
     def __len__(self):
         return len(self.path)
 
-    def _construct_index(self, path):
+    def _construct_index(self):
+        path = self.path
         i_curr = path[0][0]
         j_curr = path[0][1]
 
@@ -60,8 +61,6 @@ class Path:
         kb, ke = self.find_i(i1), self.find_i(i2)
         return self.path[kb:ke+1]
     
-    # def get cumulative similarity between j1 and j2
-
 def project_to_horizontal_axis(path):
     return (path[0][1], path[-1][1]+1)
 
