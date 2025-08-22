@@ -4,11 +4,9 @@ from . import loco
 from .path import Path, project_to_vertical_axis
 
 import numba
-from numba import int32, float64, float32, boolean
+from numba import int32, float32, boolean
 from numba import njit
 from numba.typed import List
-
-
 
 def apply_locomotif(ts, l_min, l_max, rho=None, nb=None, start_mask=None, end_mask=None, overlap=0.0, warping=True):
     """Apply the LoCoMotif algorithm to find motif sets in the given time ts.
@@ -52,7 +50,7 @@ class LoCoMotif:
 
     @classmethod
     def instance_from_rho(cls, ts, l_min, l_max, rho=None, warping=True):
-        # Default rho value
+        # Handle default rho value
         if rho is None:
             rho = 0.8 if warping else 0.5  
         lcm = cls(ts=ts, l_min=l_min, l_max=l_max)
@@ -85,17 +83,7 @@ class LoCoMotif:
     def induced_paths(self, b, e, mask=None):
         if mask is None:
             mask = np.full(len(self.ts), False)
-
-        induced_paths = []
-        for path in self._paths:
-            if b < path.j1 or path.jl < e:
-                continue
-            induced_path = path.get_subpath_between_col_indices(b, e-1)
-            b_m, e_m = project_to_vertical_axis(induced_path)
-            if not np.any(mask[b_m:e_m]):
-                induced_paths.append(induced_path)
-
-        return induced_paths
+        return _induced_paths(b, e, mask, self._paths)
 
     # iteratively finds the best motif set
     def find_best_motif_sets(self, nb=None, start_mask=None, end_mask=None, overlap=0.0, keep_fitnesses=False):
@@ -108,9 +96,6 @@ class LoCoMotif:
             start_mask = np.full(n, True)
         if end_mask is None:
             end_mask   = np.full(n, True)
-
-        start_mask = start_mask.copy()
-        end_mask   = end_mask.copy()
     
         assert 0.0 <= overlap and overlap <= 0.5
         assert start_mask.shape == (n,)
@@ -133,10 +118,7 @@ class LoCoMotif:
                 break
 
             motif_set = [project_to_vertical_axis(induced_path) for induced_path in self.induced_paths(b, e, mask)]
-            for (b_m, e_m) in motif_set:
-                l = e_m - b_m
-                l_mask = max(1, int((1 - 2*overlap) * l)) # mask length must be lower bounded by 1 (otherwise, nothing is masked when overlap=0.5)
-                mask[b_m + (l - l_mask)//2 : b_m + (l - l_mask)//2 + l_mask] = True
+            mask = _mask_motif_set(mask, motif_set, overlap)
 
             current_nb += 1
             yield (b, e), motif_set, fitnesses
@@ -152,10 +134,26 @@ class LoCoMotif:
     @property
     def cumulative_similarity_matrix(self):
         return self._loco.cumulative_similarity_matrix
-    
+
+def _mask_motif_set(mask, motif_set, overlap):
+    for (b_m, e_m) in motif_set:
+        l = e_m - b_m
+        l_mask = max(1, int((1 - 2*overlap) * l)) # mask length must be lower bounded by 1 (otherwise, nothing is masked when overlap=0.5)
+        mask[b_m + (l - l_mask)//2 : b_m + (l - l_mask)//2 + l_mask] = True
+    return mask
+
+def _induced_paths(b, e, mask, P):
+    induced_paths = []
+    for path in P:        
+        if b < path.j1 or path.jl < e:
+            continue
+        induced_path = path.get_subpath_between_col_indices(b, e-1)
+        b_m, e_m = project_to_vertical_axis(induced_path)
+        if not np.any(mask[b_m:e_m]):
+            induced_paths.append(induced_path)
+    return induced_paths
 
 from numba.experimental import jitclass
-
 @jitclass([
     ('keys', int32[:]),    
     ('path_indices', int32[:]),
@@ -254,7 +252,7 @@ class SortedPathArray:
 
 
 @njit(numba.types.Tuple((numba.types.UniTuple(int32, 2), float32, float32[:, :]))(numba.types.ListType(Path.class_type.instance_type), int32, int32, int32, float32, boolean[:], boolean[:], boolean[:], boolean[:], boolean), cache=True)
-def _find_best_candidate(P, n, l_min, l_max, nu, row_mask, col_mask, start_mask, end_mask, keep_fitnesses=False):
+def _find_best_candidate(P, n, l_min, l_max, nu, row_mask, col_mask, start_mask, end_mask, keep_fitnesses=False): 
     fitnesses = []
     # n is used for coverage normalization 
     r = len(row_mask)
@@ -381,6 +379,8 @@ def _find_best_candidate(P, n, l_min, l_max, nu, row_mask, col_mask, start_mask,
             if keep_fitnesses:
                 fitnesses.append((b_repr, e_repr, fit, n_coverage, n_score))
         
+
+
     fitnesses = np.array(fitnesses, dtype=np.float32) if keep_fitnesses and fitnesses else np.empty((0, 5), dtype=np.float32)
 
     return best_candidate, best_fitness, fitnesses

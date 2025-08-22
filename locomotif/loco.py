@@ -5,41 +5,18 @@ from . import loco_jit
 class LoCo:
 
     def __init__(self, ts, gamma=None, tau=0.5, delta_a=1.0, delta_m=0.5, warping=True, ts2=None, equal_weight_dims=False):
-        
         # If ts2 is specified, we assume it is different from ts. Alternative is self._symmetric = np.array_equal(self.ts, self.ts2) 
         self._symmetric = False
         if ts2 is None:
             self._symmetric = True
             ts2 = ts
 
-        self.ts = np.array(ts, dtype=np.float32)
-        self.ts2 = np.array(ts2, dtype=np.float32)
-
-        # Make ts of shape (n,) of shape (n, 1) such that it can be handled as a multivariate ts
-        if self.ts.ndim == 1:
-            self.ts = np.expand_dims(self.ts, axis=1)
-        if self.ts2.ndim == 1:
-            self.ts2 = np.expand_dims(self.ts2, axis=1)
+        self.ts  = ensure_multivariate(np.array(ts, dtype=np.float32))
+        self.ts2 = ensure_multivariate(np.array(ts2, dtype=np.float32))
+        assert self.ts.shape[1] == self.ts2.shape[1], "Input time series must have the same number of dimensions."
 
         # Handle the gamma argument.
-        _, D = self.ts.shape
-        if gamma is None:
-            # If no value is specified, determine the gamma value(s) based on the input TS.
-            if self._symmetric:
-                if D == 1 or not equal_weight_dims:
-                    gamma = D * [1 / np.std(ts, axis=None)**2]
-                else:
-                    gamma = [1 / np.std(ts[:, d])**2 for d in range(D)]
-            else:
-                gamma = D * [1.0]
-        # If a single value is specified for gamma, that value is used for every dimension. 
-        elif np.isscalar(gamma):
-            gamma = D * [gamma]
-        # Else, len(gamma) should be equal to the number of dimensions
-        else:
-            assert np.ndim(gamma) == 1 and len(gamma) == D
-
-        self.gamma = np.array(gamma, dtype=np.float64)
+        self.gamma = handle_gamma(self.ts, gamma, self._symmetric, equal_weight_dims)
                      
         # LoCo args
         self.warping = warping
@@ -78,7 +55,12 @@ class LoCo:
         self._csm = cumulative_similarity_matrix(self._sm, tau=self.tau, delta_a=self.delta_a, delta_m=self.delta_m, warping=self.warping, only_triu=self._symmetric, diag_offset=0)
         return self._csm
 
-    def find_best_paths(self, l_min=10, vwidth=5):
+    def find_best_paths(self, l_min=None, vwidth=None):
+        if l_min is None:
+            l_min = min(len(self.ts), len(self.ts2)) // 10
+        if vwidth is None:
+            vwidth = l_min // 2
+
         if self._csm is None:
             self.calculate_cumulative_similarity_matrix()
 
@@ -131,3 +113,33 @@ def cumulative_similarity_matrix(sm, tau=0.5, delta_a=1.0, delta_m=0.5, warping=
 def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True):
     paths = loco_jit.find_best_paths(csm, mask, tau, l_min, vwidth, warping)
     return paths
+
+def ensure_multivariate(ts):
+    ts = np.asarray(ts)
+    if ts.ndim == 1:
+        ts = ts[:, np.newaxis]
+    elif ts.ndim == 2 and ts.shape[1] == 1:
+        pass
+    elif ts.ndim != 2:
+        raise ValueError(f"Time series must be 1D or 2D, got shape {ts.shape}")
+    return ts
+
+def handle_gamma(ts, gamma, symmetric, equal_weight_dims):
+    _, D = ts.shape
+    # If no value is specified, determine the gamma value(s) based on the input TS.
+    if gamma is None:
+        if symmetric:
+            if D == 1 or not equal_weight_dims:
+                gamma = D * [1 / np.std(ts, axis=None)**2]
+            else:
+                gamma = [1 / np.std(ts[:, d])**2 for d in range(D)]
+        else:
+            gamma = D * [1.0]
+    # If a single value is specified for gamma, that value is used for every dimension. 
+    elif np.isscalar(gamma):
+        gamma = D * [gamma]
+    # Else, len(gamma) should be equal to the number of dimensions
+    else:
+        assert np.ndim(gamma) == 1 and len(gamma) == D
+    gamma = np.array(gamma, dtype=np.float64)
+    return gamma
