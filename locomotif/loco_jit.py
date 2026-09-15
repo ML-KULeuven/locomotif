@@ -163,12 +163,11 @@ def mask_vicinity(path, mask, vwidth=10):
 
 
 @njit(List(Array(int32, 2, 'C'))(float32[:, :], boolean[:, :], float32, int32, int32, boolean))
-def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True):
+def find_best_paths(csm, mask, minimum_score, l_min=10, vwidth=5, warping=True):
     # Mask all zeros
     mask = mask | (csm <= 0)
     
-    # min_path_length = l_min if not warping else np.ceil(l_min / 2)
-    start_mask = (~mask) # & (csm >= tau * min_path_length)
+    start_mask = (~mask) & (csm >= minimum_score)
     
     pos_i, pos_j = np.nonzero(start_mask)
     
