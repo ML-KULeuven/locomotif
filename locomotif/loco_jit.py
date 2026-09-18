@@ -162,6 +162,65 @@ def mask_vicinity(path, mask, vwidth=10):
     return mask
 
 
+@njit
+def low16_sort(score_bits, pos_i, pos_j, temp_bits, temp_pos_i, temp_pos_j, size):
+    for shift in (0, 8):
+        counts = np.zeros(256, dtype=np.int64)
+        for k in range(size):
+            byte = (score_bits[k] >> shift) & np.uint32(255)
+            counts[byte] += 1
+
+        total = 0
+        for byte in range(256):
+            count = counts[byte]
+            counts[byte] = total
+            total += count
+
+        next_index = counts
+        for k in range(size):
+            byte = (score_bits[k] >> shift) & np.uint32(255)
+            index = next_index[byte]
+            temp_bits[index] = score_bits[k]
+            temp_pos_i[index] = pos_i[k]
+            temp_pos_j[index] = pos_j[k]
+            next_index[byte] = index + 1
+
+        score_bits, temp_bits = temp_bits, score_bits
+        pos_i, temp_pos_i = temp_pos_i, pos_i
+        pos_j, temp_pos_j = temp_pos_j, pos_j
+
+    return pos_i, pos_j
+
+@njit
+def split_into_buckets(score_bits, pos_i, pos_j):
+    bucket_counts = np.zeros(65536, dtype=np.int64)
+    for k in range(len(score_bits)):
+        bucket = score_bits[k] >> np.uint32(16)
+        bucket_counts[bucket] += 1
+
+    bucket_starts = np.empty(65537, dtype=np.int64)
+    total = 0
+    max_bucket_size = 0
+    for bucket in range(65536):
+        bucket_starts[bucket] = total
+        total += bucket_counts[bucket]
+        max_bucket_size = max(max_bucket_size, bucket_counts[bucket])
+    bucket_starts[65536] = total
+
+    next_index = bucket_starts[:65536].copy()
+    bits_by_bucket = np.empty(len(score_bits), dtype=np.uint32)
+    pos_i_by_bucket = np.empty(len(score_bits), dtype=np.int32)
+    pos_j_by_bucket = np.empty(len(score_bits), dtype=np.int32)
+    for k in range(len(score_bits)):
+        bucket = score_bits[k] >> np.uint32(16)
+        index = next_index[bucket]
+        bits_by_bucket[index] = score_bits[k]
+        pos_i_by_bucket[index] = pos_i[k]
+        pos_j_by_bucket[index] = pos_j[k]
+        next_index[bucket] = index + 1
+
+    return bucket_starts, bits_by_bucket, pos_i_by_bucket, pos_j_by_bucket, max_bucket_size
+
 @njit(List(Array(int32, 2, 'C'))(float32[:, :], boolean[:, :], float32, int32, int32, boolean))
 def find_best_paths(csm, mask, minimum_score, l_min=10, vwidth=5, warping=True):
     # Mask all zeros
@@ -172,25 +231,37 @@ def find_best_paths(csm, mask, minimum_score, l_min=10, vwidth=5, warping=True):
     pos_i, pos_j = np.nonzero(start_mask)
     
     values = np.array([csm[pos_i[k], pos_j[k]] for k in range(len(pos_i))])
-    perm = np.argsort(values)
-    sorted_pos_i, sorted_pos_j = pos_i[perm], pos_j[perm]
+    score_bits = values.view(np.uint32)
+    bucket_starts, bits_by_bucket, pos_i_by_bucket, pos_j_by_bucket, max_bucket_size = split_into_buckets(score_bits, pos_i, pos_j)
 
-    k_best = len(sorted_pos_i) - 1
+    bucket_bits = np.empty(max_bucket_size, dtype=np.uint32)
+    bucket_pos_i = np.empty(max_bucket_size, dtype=np.int32)
+    bucket_pos_j = np.empty(max_bucket_size, dtype=np.int32)
+    temp_bits = np.empty(max_bucket_size, dtype=np.uint32)
+    temp_pos_i = np.empty(max_bucket_size, dtype=np.int32)
+    temp_pos_j = np.empty(max_bucket_size, dtype=np.int32)
+
     paths = []
 
-    while k_best >= 0:
+    for bucket in range(65535, -1, -1):
+        size = 0
+        for k in range(bucket_starts[bucket], bucket_starts[bucket + 1]):
+            i, j = pos_i_by_bucket[k], pos_j_by_bucket[k]
+            if mask[i, j]:
+                continue
+            bucket_bits[size] = bits_by_bucket[k]
+            bucket_pos_i[size] = i
+            bucket_pos_j[size] = j
+            size += 1
 
-        path = np.empty((0, 0), dtype=np.int32)
-        path_found = False
+        if size == 0:
+            continue
 
-        while not path_found:
-
-            while (mask[sorted_pos_i[k_best], sorted_pos_j[k_best]]):
-                k_best -= 1
-                if k_best < 0:
-                    return paths
-                
+        sorted_pos_i, sorted_pos_j = low16_sort(bucket_bits, bucket_pos_i, bucket_pos_j, temp_bits, temp_pos_i, temp_pos_j, size)
+        for k_best in range(size - 1, -1, -1):
             i_best, j_best = sorted_pos_i[k_best], sorted_pos_j[k_best]
+            if mask[i_best, j_best]:
+                continue
 
             if i_best < 2 or j_best < 2:
                 return paths
@@ -204,10 +275,7 @@ def find_best_paths(csm, mask, minimum_score, l_min=10, vwidth=5, warping=True):
             # mask = mask_path(path, mask)
             
             if (path[-1][0] - path[0][0] + 1) >= l_min or (path[-1][1] - path[0][1] + 1) >= l_min:
-                path_found = True
-
-
-        mask = mask_vicinity(path, mask, vwidth)
-        paths.append(path)
+                mask = mask_vicinity(path, mask, vwidth)
+                paths.append(path)
 
     return paths
