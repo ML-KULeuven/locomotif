@@ -4,7 +4,7 @@ import multiprocessing
 import gc
 
 from . import loco_jit
-from .loco import handle_gamma, ensure_multivariate
+from .loco import handle_gamma, ensure_multivariate, _minimum_path_score
 
 import tqdm
 
@@ -218,7 +218,8 @@ def _find_paths_wrapper(args):
     gc.collect()
     mask = np.full(csm.shape, False)
     ## TODO: CSM can be removed after sorting the start indices (only the order of non-zero cells matters).
-    P = loco_jit.find_best_paths(csm, mask, tau=tau, l_min=l_min, vwidth=vwidth, warping=warping)
+    minimum_score = _minimum_path_score(tau, delta_a, delta_m, l_min, warping)
+    P = loco_jit.find_best_paths(csm, mask, minimum_score=minimum_score, l_min=l_min, vwidth=vwidth, warping=warping)
     P = [path-2 for path in P]
     del csm
     del mask

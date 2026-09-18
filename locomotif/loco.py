@@ -70,7 +70,8 @@ class LoCo:
             # First, mask region around the diagional as if the diagonal is already found as a path.
             mask[np.triu_indices(len(mask), k=vwidth+1)] = False
 
-        paths = find_best_paths(self._csm, mask, self.tau, l_min=l_min, vwidth=vwidth, warping=self.warping)
+        minimum_score = _minimum_path_score(self.tau, self.delta_a, self.delta_m, l_min, self.warping)
+        paths = find_best_paths(self._csm, mask, minimum_score, l_min=l_min, vwidth=vwidth, warping=self.warping)
         paths = [path-2 for path in paths]
 
         if self._symmetric:
@@ -101,6 +102,25 @@ def estimate_tau_from_sm(sm, rho, only_triu=False):
         tau = np.quantile(sm, rho, axis=None)
     return tau
 
+def _minimum_path_score(tau, delta_a, delta_m, l_min, warping):
+    if tau <= 0 or delta_a < 0 or delta_m < 0:
+        return np.float32(0)
+
+    minimum_similarity = np.float32(tau)
+    if minimum_similarity < tau:
+        minimum_similarity = np.nextafter(minimum_similarity, np.float32(np.inf))
+
+    required_steps = l_min // 2 if warping else l_min - 1
+    accumulated = np.float32(0)
+    for _ in range(required_steps):
+        accumulated = np.float32(accumulated + minimum_similarity)
+
+    if delta_m == 0:
+        return accumulated
+
+    penalty = np.nextafter(np.float32(delta_a / delta_m), np.float32(-np.inf))
+    return max(np.float32(0), min(accumulated, penalty))
+
 def similarity_matrix_ndim(ts1, ts2, gamma=None, only_triu=False, diag_offset=0):
     return loco_jit.similarity_matrix_ndim(ts1, ts2, gamma, only_triu, diag_offset)
 
@@ -110,8 +130,8 @@ def cumulative_similarity_matrix(sm, tau=0.5, delta_a=1.0, delta_m=0.5, warping=
     else:
         return loco_jit.cumulative_similarity_matrix_no_warping(sm, tau, delta_a, delta_m, only_triu, diag_offset)
 
-def find_best_paths(csm, mask, tau, l_min=10, vwidth=5, warping=True):
-    paths = loco_jit.find_best_paths(csm, mask, tau, l_min, vwidth, warping)
+def find_best_paths(csm, mask, minimum_score, l_min=10, vwidth=5, warping=True):
+    paths = loco_jit.find_best_paths(csm, mask, minimum_score, l_min, vwidth, warping)
     return paths
 
 def ensure_multivariate(ts):
